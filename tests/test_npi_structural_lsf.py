@@ -54,6 +54,40 @@ def test_new_operation_validates_and_preserves_old_protocol(tmp_path, monkeypatc
     assert scan.validate_scan_worker_result(req, r.result)['total_facts'] == 1
 
 
+def test_worker_driver_categories_and_negative_proof_validation(tmp_path, monkeypatch):
+    from tests.test_npi_structural_drivers import provider, overlap_reader, CATEGORIES
+    from src.npi_structural_drivers import writer_identity
+    req,_,_,_=request(tmp_path)
+    options=validate_semantic_options(dict(semantic_scope='top.u',semantic_categories=CATEGORIES))[1]
+    req=req.model_copy(update={'options':options})
+    assert npi_lsf.parse_worker_request_bytes(req.model_dump_json().encode()).options==options
+    def query(backend, options, *, top, budget, state=None):
+        p=provider();p.budget=budget
+        p.artifact_identity=hashlib.sha256((req.kdb_identity_sha256+'\0'+req.top).encode()).hexdigest()
+        reader=overlap_reader()
+        for index,row in enumerate(reader.values['top.u.S[9]'][0]):
+            name=f'top.u.child{index}.out'
+            row.update(driver_id=hashlib.sha256(writer_identity(name).encode()).hexdigest(),
+                       signal_path=name,kind='instance_port')
+        result=scan_native_ports(p,options,state=state,driver_reader=reader)
+        result.pop('query_metrics')
+        result['metrics'].update(native_call_count=budget.call_count,native_instance_count=budget.scope_count,
+                                 native_handle_count=1,estimated_fact_bytes=budget.fact_bytes)
+        result['kdb_binding']=dict(capture_kdb_anchor(req.kdb_path).receipt(),load_status='loaded',load_quality='clean')
+        return result
+    monkeypatch.setattr(scan,'query_native_scan',query)
+    backend=NS(kdb_load_quality='clean',bind_native_inputs=lambda _:None,bind_kdb_anchor=lambda _:None)
+    response=npi_lsf.execute_worker_request(req,backend=backend)
+    assert response.status=='ok'
+    assert scan.validate_scan_worker_result(req,response.result)['total_facts']==2
+    raw=deepcopy(response.result)
+    next(f for f in raw['facts'] if f['kind']=='undriven_signal')['driver_inventory_complete']=False
+    assert npi_lsf._validate_operation_result(req,raw) is None
+    raw=deepcopy(response.result)
+    next(f for f in raw['facts'] if f['kind']=='multiple_driver')['drivers'][0]['driver_id']='forged'
+    assert npi_lsf._validate_operation_result(req,raw) is None
+
+
 @pytest.mark.parametrize('field', ['artifact_identity', 'selected_top', 'scope', 'request_fingerprint',
                                    'category_results', 'facts', 'counts', 'work', 'backend_status'])
 def test_forged_result_rejected(tmp_path, monkeypatch, field):

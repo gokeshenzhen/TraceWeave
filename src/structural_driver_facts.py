@@ -41,6 +41,8 @@ def validate_driver_fact(fact):
             or len({r['driver_id'] for r in rows}) != len(rows)
             or type(fact.get('driver_count')) is not int
             or fact['driver_count'] < len(rows)
+            or type(fact.get('driver_evidence_truncated')) is not bool
+            or fact['driver_evidence_truncated'] != (fact['driver_count'] > len(rows))
             or type(fact.get('driver_inventory_complete')) is not bool
             or fact.get('driver_count_is_lower_bound') is not (not fact['driver_inventory_complete'])
             or fact.get('runtime_conflict_checked') is not False

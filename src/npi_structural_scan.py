@@ -14,12 +14,13 @@ import time
 
 from .hierarchy_source_ir import HierarchyBudgetExceeded, HierarchyQueryBudget
 from .npi_hierarchy_source import _LanguageIterator, NpiHierarchyUnavailable
-from .structural_semantic_router import NPI_PORT_CATEGORIES
+from .structural_semantic_router import NPI_PORT_CATEGORIES, NPI_CATEGORIES
+from .structural_driver_facts import DRIVER_CATEGORIES, driver_fact
 from .structural_gap_diagnostics import GapDiagnostics
-from .structural_scan_continuation import initial_state, validate_state, new_job, MAX_FRONTIER_BYTES, MAX_PENDING, MAX_CUMULATIVE
+from .structural_scan_continuation import initial_state, validate_state, new_job, job_position, MAX_FRONTIER_BYTES, MAX_PENDING, MAX_CUMULATIVE
 from .structural_native_values import BITWISE, REDUCTIONS, operate, vector, value as abstract_value
 
-CAPABILITY_VERSION = "npi_input_ports_v7"
+CAPABILITY_VERSION = "npi_structural_v8"
 _DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar", "npiStructVar", "npiStructNet", "npiPackedArrayVar", "npiPackedArrayNet", "npiEnumVar", "npiEnumNet"}
 _CONSTANTS = {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst', 'npiPackedArrayParameter'}
 _SELECTS = {'npiBitSelect', 'npiRegBit', 'npiNetBit', 'npiParameterBit', 'npiPartSelect'}
@@ -52,21 +53,25 @@ def scan_budget(options, *, deadline=None):
     return budget
 
 
-def scan_native_ports(provider, options, *, state=None):
+def scan_native_ports(provider, options, *, state=None, driver_reader=None):
     p, budget = provider, provider.budget
-    categories = set(options['categories']) & NPI_PORT_CATEGORIES
+    categories = set(options['categories']) & NPI_CATEGORIES
+    driver_categories = categories & DRIVER_CATEGORIES
     root = options.get('scope') or p.top
     work = initial_state(root, categories) if state is None else validate_state(state, top=p.top, root=root, categories=categories)
     gaps = {c: set(work['category_gaps'][c]) for c in categories}
     facts, seen = [], set()
     started = time.monotonic()
-    ports = 0
+    ports = driver_bits = 0
     diagnostics = GapDiagnostics()
     diagnostics.merge(work['gap_summary'])
     gap_sink, diag_sink = gaps, diagnostics
 
     def gap(reason, affected=None, **details):
-        for c in categories if affected is None else categories & set(affected):
+        selected = categories if affected is None else categories & set(affected)
+        if not selected:
+            return
+        for c in selected:
             gap_sink[c].add(reason)
         diag_sink.add(reason, details)
 
@@ -532,7 +537,7 @@ def scan_native_ports(provider, options, *, state=None):
     def inspect_ports(handle, path, job):
         nonlocal ports, gap_sink, diag_sink
         if path == p.top:
-            job['phase'] = 'children'
+            job['phase'] = 'signals' if driver_categories else 'children'
             return
         it = _LanguageIterator(p, p.low.Port, handle)
         index = 0
@@ -543,7 +548,7 @@ def scan_native_ports(provider, options, *, state=None):
                 if port is None:
                     if index < job['port_index']:
                         raise NpiHierarchyUnavailable('npi_scan_position_changed')
-                    job['phase'] = 'children'
+                    job['phase'] = 'signals' if driver_categories else 'children'
                     break
                 name = p.scalar(port, 'name')
                 next_fingerprint = position_fingerprint(fingerprint, name)
@@ -574,13 +579,138 @@ def scan_native_ports(provider, options, *, state=None):
         finally:
             p.close_iterator(it)
 
+    def inspect_signals(handle, path, job):
+        nonlocal driver_bits
+        if driver_reader is None:
+            gap('npi_driver_reader_unavailable', DRIVER_CATEGORIES)
+            job['phase'] = 'children'
+            return
+        index, fingerprint = 0, ''
+        scope_kind = p.scalar(handle, 'type')
+        owner, owner_kind = handle, scope_kind
+        for _ in range(budget.max_depth + 1):
+            if owner_kind != 'npiGenScope':
+                break
+            owner = p.one(owner, 'scope_handle')
+            if owner is None:
+                break
+            owner_kind = p.scalar(owner, 'type')
+        blackbox = p.scalar(owner, 'is_black_box') if owner is not None and owner_kind == 'npiModule' else None
+        eligible_scope = owner_kind == 'npiModule' and blackbox == 0 and not p.degraded
+        if not eligible_scope and 'undriven_signal' in driver_categories:
+            gap('npi_driver_scope_unverified', {'undriven_signal'})
+        boundaries = set()
+        iterator = _LanguageIterator(p, p.low.Port, handle)
+        try:
+            while (port := iterator.read()) is not None:
+                direction = p.scalar(port, 'direction')
+                if direction in {'npiInput','npiInout','npiRef'}:
+                    low = p.one(port, 'low_conn_handle')
+                    name = p.scalar(low, 'full_name') if low is not None else None
+                    if isinstance(name, str) and name.startswith(path + '.'):
+                        boundaries.add(name)
+                    else:
+                        eligible_scope = False
+                        gap('npi_driver_port_boundary_unmodeled', {'undriven_signal'})
+        finally:
+            p.close_iterator(iterator)
+        for relation in ('Net', 'Reg'):
+            constant = getattr(p.low, relation, None)
+            if constant is None:
+                gap('npi_driver_declarations_unavailable', DRIVER_CATEGORIES)
+                continue
+            it = _LanguageIterator(p, constant, handle)
+            try:
+                while (signal := it.read()) is not None:
+                    name, full = p.scalar(signal, 'name'), p.scalar(signal, 'full_name')
+                    kind, size = p.scalar(signal, 'type'), p.scalar(signal, 'size')
+                    identity = [relation, name, full, kind, size]
+                    following = position_fingerprint(fingerprint, identity)
+                    if index < job['signal_index']:
+                        index += 1; fingerprint = following
+                        if index == job['signal_index'] and fingerprint != job['signal_fingerprint']:
+                            raise NpiHierarchyUnavailable('npi_scan_position_changed')
+                        continue
+                    try:
+                        if not isinstance(name, str) or full != path + '.' + name:
+                            raise _UnsupportedPort('npi_driver_signal_identity_unavailable')
+                        if kind not in {'npiNet','npiReg','npiLogicVar','npiBitVar','npiIntVar','npiIntegerVar'}:
+                            raise _UnsupportedPort('npi_driver_signal_type_unsupported')
+                        size = width(signal)
+                        if size == 1:
+                            # A scalar has no Range. Preserve an explicitly
+                            # declared one-bit range when the SDK supplies it.
+                            try:
+                                left, right, stride = packed_range(signal, size, 0)
+                            except _UnsupportedPort:
+                                ts = p.one(signal, 'typespec_handle')
+                                if ts is None or p.scalar(ts, 'type') not in {'npiLogicTypespec','npiBitTypespec'}:
+                                    raise
+                                iterator = _LanguageIterator(p, p.low.Range, ts)
+                                try:
+                                    if iterator.read() is not None:
+                                        raise _UnsupportedPort('npi_driver_range_unavailable')
+                                finally:
+                                    p.close_iterator(iterator)
+                                left = right = 0; stride = 1
+                        else:
+                            left, right, stride = packed_range(signal, size, 0)
+                        if stride != 1:
+                            raise _UnsupportedPort('npi_driver_packed_shape_unsupported')
+                        bits = tuple(range(left, right + (-1 if left > right else 1), -1 if left > right else 1))
+                        net_kind = p.scalar(signal, 'net_type') if kind == 'npiNet' else 'variable'
+                        current = position_fingerprint(following, [left, right, net_kind])
+                        if job['bit_index'] and current != job['signal_current_fingerprint']:
+                            raise NpiHierarchyUnavailable('npi_scan_position_changed')
+                        source = location(signal)
+                    except _UnsupportedPort as exc:
+                        if job['bit_index']:
+                            raise NpiHierarchyUnavailable('npi_scan_position_changed') from exc
+                        gap(exc.reason, DRIVER_CATEGORIES)
+                        bits = ()
+                    except HierarchyBudgetExceeded as exc:
+                        if exc.reason not in {'native_expression_depth_limit', 'native_operand_limit'}:
+                            raise
+                        gap(exc.reason, DRIVER_CATEGORIES)
+                        bits = ()
+                    for offset in range(job['bit_index'], len(bits)):
+                        if ports + driver_bits >= budget.max_symbols:
+                            raise HierarchyBudgetExceeded('native_driver_bit_limit')
+                        bit = bits[offset]
+                        query_path = full if size == 1 and bit == 0 else f'{full}[{bit}]'
+                        drivers, complete, used, reasons = driver_reader.read(query_path, categories=driver_categories)
+                        driver_bits += 1
+                        selected_kind = ('multiple_driver' if len(drivers) >= 2 else
+                            'undriven_signal' if not drivers and complete and used
+                            and full not in boundaries and eligible_scope and kind == 'npiNet'
+                            and net_kind in {'npiWire','npiTri','npiUwire'} else None)
+                        if not drivers and complete and used and full not in boundaries and selected_kind is None:
+                            reasons.add('npi_driver_negative_boundary')
+                        if selected_kind in driver_categories:
+                            fact = driver_fact(selected_kind, full, [bit], drivers,
+                                complete=complete, source=source, net_kind=net_kind)
+                            fact['source_association'] = 'unverified'
+                            save(fact.pop('kind'), **fact)
+                        for reason in reasons:
+                            gap(reason, DRIVER_CATEGORIES)
+                        job['bit_index'] = offset + 1
+                        job['signal_current_fingerprint'] = current
+                    index += 1; fingerprint = following
+                    job.update(signal_index=index, bit_index=0, signal_fingerprint=fingerprint,
+                               signal_current_fingerprint='')
+            finally:
+                p.close_iterator(it)
+        if index < job['signal_index']:
+            raise NpiHierarchyUnavailable('npi_scan_position_changed')
+        job['phase'] = 'children'
+
     def job_bytes(job):
         return 512 + 6 * (len(job['path']) + len(job['parent'] or ''))
 
     pending = work['pending']
     frontier_bytes = sum(job_bytes(j) + sum(job_bytes(c) for c in j['children']) for j in pending)
     initial_position = (work['completed_instances'], sum(work['counts'].values()),
-                        [(j['path'], j['phase'], j['port_index'], j['child_index']) for j in pending])
+                        [job_position(j) for j in pending])
     stop_reason = None
 
     def visit_job(job):
@@ -614,7 +744,12 @@ def scan_native_ports(provider, options, *, state=None):
         if kind in {'npiModule', 'npiInterface', 'npiProgram'} and p.scalar(handle, 'is_black_box') == 1:
             gap('npi_blackbox_boundary')
         if job['phase'] == 'ports':
-            inspect_ports(handle, path, job)
+            if categories & NPI_PORT_CATEGORIES:
+                inspect_ports(handle, path, job)
+            else:
+                job['phase'] = 'signals' if driver_categories else 'children'
+        if job['phase'] == 'signals':
+            inspect_signals(handle, path, job)
         it = _LanguageIterator(p, p.low.InternalScope, handle)
         index = 0
         fingerprint = ''
@@ -684,11 +819,11 @@ def scan_native_ports(provider, options, *, state=None):
                     recycle()
                     live = 0
                 job = pending[-1]
-                before = (job['phase'], job['port_index'], job['child_index'])
+                before = job_position(job)
                 try:
                     complete = visit_job(job) is not False
                 except HierarchyBudgetExceeded as exc:
-                    after = (job['phase'], job['port_index'], job['child_index'])
+                    after = job_position(job)
                     if exc.reason == 'native_handle_limit' and recycle is not None and (live > 0 or after != before):
                         # Scope/port frames are copied and every native iterator
                         # has closed. Retry only after a real release/advance.
@@ -712,7 +847,7 @@ def scan_native_ports(provider, options, *, state=None):
     if stop_reason:
         gap(stop_reason)
     final_position = (work['completed_instances'], sum(work['counts'].values()),
-                      [(j['path'], j['phase'], j['port_index'], j['child_index']) for j in pending])
+                      [job_position(j) for j in pending])
     resumable = bool(pending and initial_position != final_position and stop_reason not in {
         'timeout_sec', 'scope_depth_limit', 'native_frontier_limit', 'native_total_fact_limit', 'native_total_scope_limit'})
     results = {c: {'status': 'partial' if gaps[c] else 'complete', 'gaps': sorted(gaps[c])} for c in categories}
@@ -731,15 +866,23 @@ def scan_native_ports(provider, options, *, state=None):
                     next_scopes=[j['path'] for j in pending[-3:]]),
                 instances_visited=budget.scope_count, query_metrics={}, analysis_limits=[], coverage_status='partial' if all_gaps else 'complete',
                 limitations=['kdb_source_association_unverified', 'native_positions_not_current_source_validation',
-                             'input_ports_only', 'local_native_rss_not_hard_isolated'],
+                             *(['static_netlist_drivers_only','runtime_force_dpi_class_writes_not_checked']
+                               if driver_categories else ['input_ports_only']), 'local_native_rss_not_hard_isolated'],
                 metrics={'native_port_count': ports,
+                         **({'native_driver_bit_count':driver_bits} if driver_categories else {}),
                          'native_handle_peak': getattr(p, 'handle_peak', 0),
                          'native_handle_batches': getattr(p, 'handle_batches', 1),
                          'native_traversal_ms': (time.monotonic()-started)*1000})
 
 
 def query_native_scan(backend, options, *, top, budget, state=None):
-    result = backend._query_language(lambda p: scan_native_ports(p, options, state=state), top=top, budget=budget)
+    def query(p):
+        reader = None
+        if set(options['categories']) & DRIVER_CATEGORIES:
+            from .npi_structural_drivers import NpiBitDrivers
+            reader = NpiBitDrivers(p, backend)
+        return scan_native_ports(p, options, state=state, driver_reader=reader)
+    result = backend._query_language(query, top=top, budget=budget)
     if result.get('analysis_limits'):
         result['status'] = 'partial'
         for row in result['category_results'].values():

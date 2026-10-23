@@ -11,6 +11,7 @@ import copy
 from .structural_driver_facts import DRIVER_CATEGORIES
 
 NPI_PORT_CATEGORIES = frozenset({"constant_connection", "open_input"})
+NPI_CATEGORIES = NPI_PORT_CATEGORIES | DRIVER_CATEGORIES
 
 
 def category_result(result, category):
@@ -44,7 +45,12 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
             "selected_top": raw.get("selected_top"),
             "checked_scope": raw.get("checked_scope", scope),
             "kdb_binding": copy.deepcopy(raw.get("kdb_binding")),
-            "evidence_domain": "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics",
+            "evidence_domain": ("elaborated_input_ports_and_static_drivers"
+                if backend == "verdi_npi" and set(raw.get('categories_checked', ())) & DRIVER_CATEGORIES
+                and set(raw.get('categories_checked', ())) & NPI_PORT_CATEGORIES else
+                "elaborated_static_drivers" if backend == "verdi_npi"
+                and set(raw.get('categories_checked', ())) & DRIVER_CATEGORIES else
+                "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics"),
             "status": raw["status"], "categories_checked": raw.get("categories_checked", []),
             "selected_categories": [], "total_facts": raw.get("total_facts", 0),
             "gaps": raw.get("gaps", []), "limitations": raw.get("limitations", []),

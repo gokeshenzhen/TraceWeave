@@ -18,6 +18,29 @@ from src.structural_semantic_runtime import SemanticScanRuntime
 from tests.test_structural_scan_runtime import context
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize('mode',['auto','deep'])
+async def test_driver_categories_use_native_before_any_source_build(setup,monkeypatch,mode):
+    from src.structural_driver_facts import driver_fact
+    args,calls,_=setup
+    categories=['multiple_driver','undriven_signal']
+    def query(*args,**kwargs):
+        calls.append('native_driver_scan')
+        fact=driver_fact('multiple_driver','top.n',[0],
+                         [{'driver_id':'one'},{'driver_id':'two'}],complete=True)
+        return dict(status='complete',categories_checked=categories,gaps=[],
+                    category_results={c:dict(status='complete',gaps=[]) for c in categories},
+                    facts=[fact],total_facts=1,metrics={})
+    async def source(**kwargs):pytest.fail('complete native driver scan started source supplementation')
+    monkeypatch.setattr(native,'query_native_scan',query)
+    monkeypatch.setattr(server._semantic_scan_runtime,'scan',source)
+    result=await server._dispatch('scan_structural_risks',
+        {**args,'analysis_mode':mode,'semantic_categories':categories})
+    assert result.semantic.status=='complete'
+    assert result.semantic.backend=='verdi_npi'
+    assert 'native_driver_scan' in calls
+
+
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     log, source, _ = context(tmp_path, 'module top; wire [3:0] x; endmodule\n')

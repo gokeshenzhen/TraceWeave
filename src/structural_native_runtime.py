@@ -15,7 +15,7 @@ from .kdb_anchor import KdbBindingChanged
 from .native_query import NATIVE_IDENTITY_ERRORS, NativeInputChanged, RequestBudget, read_native_inputs
 from .npi_hierarchy_source import NpiHierarchyUnavailable
 from .npi_structural_scan import CAPABILITY_VERSION, query_native_scan, scan_budget
-from .structural_semantic_router import NPI_PORT_CATEGORIES, combine_semantics, missing_categories
+from .structural_semantic_router import NPI_CATEGORIES, combine_semantics, missing_categories
 from .structural_scan_continuation import ScanContinuationInvalid, ScanContinuationStore
 
 
@@ -65,7 +65,7 @@ class StructuralNativeRuntime:
 
         try:
             with anyio.fail_after(budget.remaining()):
-                if set(options['categories']) & NPI_PORT_CATEGORIES:
+                if set(options['categories']) & NPI_CATEGORIES:
                     try:
                         inputs = await run_thread(lambda: read_native_inputs(
                             dict(compile_log=compile_log, simulator=simulator, top_hint=top_hint),

@@ -16,6 +16,8 @@ from .native_query_codec import decode_native_inputs, encode_native_inputs
 from .npi_hierarchy_source import NpiHierarchyUnavailable
 from .npi_structural_scan import CAPABILITY_VERSION, query_native_scan, scan_budget
 from .structural_semantic_runtime import validate_semantic_options
+from .structural_semantic_router import NPI_CATEGORIES
+from .structural_driver_facts import DRIVER_CATEGORIES, validate_driver_fact
 
 
 def validate_scan_options(options):
@@ -71,7 +73,7 @@ def validate_scan_worker_result(request, result):
             or binding.get('identity_basis') != 'bounded_elaboration_maps'):
         raise ValueError('invalid scan load binding')
     categories = set(request.options['categories'])
-    if set(result['category_results']) != categories or set(result['categories_checked']) != categories & {'constant_connection', 'open_input'}:
+    if set(result['category_results']) != categories or set(result['categories_checked']) != categories & NPI_CATEGORIES:
         raise ValueError('worker scan categories mismatch')
     for category, row in result['category_results'].items():
         if (set(row) != {'status', 'gaps'} or row['status'] not in {'complete', 'partial', 'unsupported'}
@@ -98,11 +100,25 @@ def validate_scan_worker_result(request, result):
         raise ValueError('invalid fact count')
     root = request.options['scope'] or request.top
     for fact in facts:
-        if (fact.get('kind') not in categories & {'constant_connection', 'open_input'}
+        if (fact.get('kind') not in categories & NPI_CATEGORIES
                 or not isinstance(fact.get('instance'), str)
                 or not (fact['instance'] == root or fact['instance'].startswith(root + '.'))
-                or fact['instance'] == request.top or not isinstance(fact.get('port'), str) or not fact['port']
-                or fact.get('source_association') != 'unverified' or fact.get('origin') != 'input_binding'):
+                or fact.get('source_association') != 'unverified'):
+            raise ValueError('invalid native fact scope')
+        if fact['kind'] in DRIVER_CATEGORIES:
+            validate_driver_fact(fact)
+            from .npi_structural_drivers import writer_identity
+            if len(fact['target_bits']) != 1:
+                raise ValueError('native scan facts must preserve the current bit position')
+            for driver in fact['drivers']:
+                name = driver.get('signal_path')
+                if (not isinstance(name, str) or not 0 < len(name) <= 16384
+                        or driver['driver_id'] != hashlib.sha256(writer_identity(name).encode()).hexdigest()
+                        or driver.get('kind') not in {'instance_port','always_ff','always_comb','assign'}):
+                    raise ValueError('invalid native structural writer identity')
+            continue
+        if (fact['instance'] == request.top or not isinstance(fact.get('port'), str) or not fact['port']
+                or fact.get('origin') != 'input_binding'):
             raise ValueError('invalid native port fact')
         if fact['kind'] == 'constant_connection':
             width = fact.get('width')
@@ -125,7 +141,7 @@ def validate_scan_worker_result(request, result):
     metrics = result['metrics']
     allowed_metrics = {'native_port_count', 'native_traversal_ms', 'scope_count', 'native_call_count',
         'symbol_count', 'file_count', 'estimated_fact_bytes', 'query_ms', 'native_handle_count',
-        'native_iterator_release_count', 'language_cleanup_ms', 'design_load_ms',
+        'native_iterator_release_count', 'language_cleanup_ms', 'design_load_ms', 'native_driver_bit_count',
         'query_with_cleanup_validation_ms', 'native_instance_count', 'native_handle_peak', 'native_handle_batches'}
     if (set(metrics) - allowed_metrics or any(type(v) not in {int, float} or not math.isfinite(v) or v < 0 for v in metrics.values())
             or type(result['instances_visited']) is not int or result['instances_visited'] != metrics.get('native_instance_count')):
@@ -136,6 +152,9 @@ def validate_scan_worker_result(request, result):
                          ('native_handle_peak', 16385), ('native_handle_batches', 100001)]:
         if type(metrics.get(key)) is not int or not 0 <= metrics[key] <= maximum:
             raise ValueError('worker scan exceeded work budget')
+    if categories & DRIVER_CATEGORIES and (type(metrics.get('native_driver_bit_count')) is not int
+            or not 0 <= metrics['native_driver_bit_count'] <= 100000):
+        raise ValueError('invalid native driver work count')
     if metrics['native_handle_count'] >= 16385 and metrics['native_handle_batches'] <= 1 and (result['status'] != 'partial' or 'native_handle_limit' not in result['gaps']):
         raise ValueError('unreported native handle stop')
     return result

@@ -8,7 +8,7 @@ import re
 import secrets
 import time
 
-from .structural_semantic_router import NPI_PORT_CATEGORIES
+from .structural_semantic_router import NPI_CATEGORIES
 
 MAX_FRONTIER_BYTES = 1024 * 1024
 MAX_PENDING = 8192
@@ -21,12 +21,17 @@ class ScanContinuationInvalid(ValueError):
 
 def new_job(path, parent=None, depth=0):
     return dict(path=path, parent=parent, depth=depth, phase='ports', port_index=0,
-                child_index=0, port_fingerprint='', child_fingerprint='', children=[])
+                child_index=0, port_fingerprint='', child_fingerprint='', children=[],
+                signal_index=0, bit_index=0, signal_fingerprint='', signal_current_fingerprint='')
+
+
+def job_position(job):
+    return tuple(job[k] for k in ('path','phase','port_index','signal_index','bit_index','child_index'))
 
 
 def initial_state(root, categories):
-    return dict(version=1, pending=[new_job(root)], completed_instances=0,
-                counts={}, category_gaps={c: [] for c in categories & NPI_PORT_CATEGORIES}, gap_summary=[])
+    return dict(version=2, pending=[new_job(root)], completed_instances=0,
+                counts={}, category_gaps={c: [] for c in categories & NPI_CATEGORIES}, gap_summary=[])
 
 
 def validate_state(state, *, top, root, categories):
@@ -34,14 +39,14 @@ def validate_state(state, *, top, root, categories):
     if not isinstance(state, dict) or len(json.dumps(state).encode()) > MAX_FRONTIER_BYTES:
         raise ValueError('invalid scan frontier')
     if (set(state) != {'version', 'pending', 'completed_instances', 'counts', 'category_gaps', 'gap_summary'}
-            or type(state['version']) is not int or state['version'] != 1):
+            or type(state['version']) is not int or state['version'] != 2):
         raise ValueError('invalid scan state fields')
     if type(state['completed_instances']) is not int or not 0 <= state['completed_instances'] <= MAX_CUMULATIVE:
         raise ValueError('invalid cumulative scan count')
-    if (not isinstance(state['counts'], dict) or set(state['counts']) - (set(categories) & NPI_PORT_CATEGORIES)
+    if (not isinstance(state['counts'], dict) or set(state['counts']) - (set(categories) & NPI_CATEGORIES)
             or any(type(n) is not int or not 0 <= n <= MAX_CUMULATIVE for n in state['counts'].values())):
         raise ValueError('invalid cumulative fact counts')
-    if not isinstance(state['category_gaps'], dict) or set(state['category_gaps']) != set(categories) & NPI_PORT_CATEGORIES:
+    if not isinstance(state['category_gaps'], dict) or set(state['category_gaps']) != set(categories) & NPI_CATEGORIES:
         raise ValueError('invalid cumulative scan gaps')
     for gaps in state['category_gaps'].values():
         if not isinstance(gaps, list) or len(gaps) > 64 or any(not isinstance(g, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,127}', g) for g in gaps):
@@ -57,7 +62,7 @@ def validate_state(state, *, top, root, categories):
         raise ValueError('invalid pending scopes')
     paths = set()
     def job(row, child=False):
-        if not isinstance(row, dict) or set(row) != {'path', 'parent', 'depth', 'phase', 'port_index', 'child_index', 'port_fingerprint', 'child_fingerprint', 'children'}:
+        if not isinstance(row, dict) or set(row) != {'path', 'parent', 'depth', 'phase', 'port_index', 'child_index', 'port_fingerprint', 'child_fingerprint', 'children', 'signal_index', 'bit_index', 'signal_fingerprint', 'signal_current_fingerprint'}:
             raise ValueError('invalid scope job')
         path, parent = row['path'], row['parent']
         if (not isinstance(path, str) or not 1 <= len(path) <= 16384
@@ -75,18 +80,27 @@ def validate_state(state, *, top, root, categories):
             raise ValueError('invalid scan parent')
         if type(row['depth']) is not int or not 0 <= row['depth'] <= 129:
             raise ValueError('invalid scan depth')
-        if row['phase'] not in {'ports', 'children'} or child and row['phase'] != 'ports':
+        if row['phase'] not in {'ports', 'signals', 'children'} or child and row['phase'] != 'ports':
             raise ValueError('invalid scope phase')
-        if any(type(row[k]) is not int or not 0 <= row[k] <= 100000 for k in ['port_index', 'child_index']):
+        if any(type(row[k]) is not int or not 0 <= row[k] <= 100000 for k in ['port_index', 'child_index', 'signal_index']):
             raise ValueError('invalid scope position')
-        if child and (row['port_index'] or row['child_index']):
+        if type(row['bit_index']) is not int or not 0 <= row['bit_index'] <= 4096:
+            raise ValueError('invalid bit position')
+        if child and (row['port_index'] or row['child_index'] or row['signal_index'] or row['bit_index']):
             raise ValueError('uninspected child has a position')
-        for index, fingerprint in [('port_index', 'port_fingerprint'), ('child_index', 'child_fingerprint')]:
+        for index, fingerprint in [('port_index', 'port_fingerprint'), ('child_index', 'child_fingerprint'), ('signal_index', 'signal_fingerprint')]:
             value = row[fingerprint]
             if not isinstance(value, str) or (value != '' if row[index] == 0 else not re.fullmatch(r'[0-9a-f]{64}', value)):
                 raise ValueError('invalid scan position fingerprint')
-        if row['phase'] == 'ports' and (row['child_index'] or row['children']):
+        current = row['signal_current_fingerprint']
+        if (not isinstance(current, str) or (current != '' if row['bit_index'] == 0 else not re.fullmatch(r'[0-9a-f]{64}', current))):
+            raise ValueError('invalid current signal fingerprint')
+        if row['phase'] == 'ports' and (row['child_index'] or row['children'] or row['signal_index'] or row['bit_index']):
             raise ValueError('port phase has inspected children')
+        if row['phase'] == 'signals' and (row['child_index'] or row['children']):
+            raise ValueError('signal phase has inspected children')
+        if row['phase'] == 'children' and row['bit_index']:
+            raise ValueError('child phase has unfinished signal')
         if not isinstance(row['children'], list) or len(row['children']) > MAX_PENDING or child and row['children']:
             raise ValueError('invalid child frontier')
         for c in row['children']:
