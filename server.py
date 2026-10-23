@@ -11776,6 +11776,14 @@ def _trim_semantic_scan(model: schemas.SemanticScanResult, limit: int) -> dict:
     )
     payload["facts"] = facts
     payload["instance_bindings"] = bindings
+    for group in payload['result_groups']:
+        if limit <= 3:
+            for row in group.get('gap_summary', []):
+                row['examples_truncated'] |= bool(row['examples'])
+                row['examples'] = []
+        if limit == 0 and group.get('gap_summary'):
+            group['gap_summary'] = []
+            group['gap_summary_truncated'] = True
     return payload
 
 

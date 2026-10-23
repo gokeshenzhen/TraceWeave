@@ -543,6 +543,24 @@ class StructuralCategoryCoverage(SchemaModel):
     gaps: list[str] = Field(default_factory=list)
 
 
+class StructuralGapExample(SchemaModel):
+    instance: str = Field(max_length=256)
+    port: str = Field(max_length=128)
+    expression_kind: str | None = Field(default=None, max_length=64)
+    parent_kind: str | None = Field(default=None, max_length=64)
+    operator: str | None = Field(default=None, max_length=64)
+    actual_width: StrictInt | None = None
+    port_width: StrictInt | None = None
+
+
+class StructuralGapSummary(SchemaModel):
+    reason: str = Field(pattern=r'^[a-z][a-z0-9_]*$', max_length=128)
+    occurrences: StrictInt = Field(ge=1, le=100001)
+    affected_ports: StrictInt = Field(ge=0, le=100000)
+    examples: list[StructuralGapExample] = Field(default_factory=list, max_length=2)
+    examples_truncated: bool = False
+
+
 class StructuralResultGroup(SchemaModel):
     group_id: str
     backend: Literal["verdi_npi", "slang"]
@@ -558,6 +576,17 @@ class StructuralResultGroup(SchemaModel):
     total_facts: int = 0
     gaps: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    gap_summary: list[StructuralGapSummary] = Field(default_factory=list, max_length=64)
+    gap_summary_truncated: bool = False
+
+    @model_serializer(mode='wrap')
+    def omit_empty_gap_summary(self, handler):
+        row = handler(self)
+        if not self.gap_summary:
+            row.pop('gap_summary', None)
+        if not self.gap_summary_truncated:
+            row.pop('gap_summary_truncated', None)
+        return row
 
 
 class SemanticScanResult(SchemaModel):

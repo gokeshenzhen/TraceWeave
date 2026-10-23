@@ -15,6 +15,7 @@ import time
 from .hierarchy_source_ir import HierarchyBudgetExceeded, HierarchyQueryBudget
 from .npi_hierarchy_source import _LanguageIterator, NpiHierarchyUnavailable
 from .structural_semantic_router import NPI_PORT_CATEGORIES
+from .structural_gap_diagnostics import GapDiagnostics
 
 CAPABILITY_VERSION = "npi_input_ports_v2"
 _DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar"}
@@ -29,8 +30,9 @@ _IGNORE_SCOPES = {"npiTask", "npiFunction", "npiNamedBegin", "npiNamedFork", "np
 
 
 class _UnsupportedPort(Exception):
-    def __init__(self, reason):
+    def __init__(self, reason, **details):
         self.reason = reason
+        self.details = details
         super().__init__(reason)
 
 
@@ -51,15 +53,17 @@ def scan_native_ports(provider, options):
     facts, seen = [], set()
     started = time.monotonic()
     ports = 0
+    diagnostics = GapDiagnostics()
 
-    def gap(reason, affected=None):
+    def gap(reason, affected=None, **details):
         for c in categories if affected is None else categories & set(affected):
             gaps[c].add(reason)
+        diagnostics.add(reason, details)
 
     def width(handle):
         value = p.scalar(handle, 'size')
         if type(value) is not int or value < 1:
-            raise _UnsupportedPort('npi_width_unavailable')
+            raise _UnsupportedPort('npi_width_unavailable', expression_kind=p.scalar(handle, 'type'), actual_width=value)
         if value > options['limits']['max_width']:
             raise _UnsupportedPort('native_width_limit')
         return value
@@ -116,8 +120,9 @@ def scan_native_ports(provider, options):
 
     def selection(handle, kind, depth):
         parent = p.one(handle, 'parent_handle')
-        if parent is None or p.scalar(parent, 'type') not in _DYNAMIC | _CONSTANTS:
-            raise _UnsupportedPort('npi_selection_parent_unmodeled')
+        parent_kind = p.scalar(parent, 'type') if parent is not None else None
+        if parent_kind not in _DYNAMIC | _CONSTANTS:
+            raise _UnsupportedPort('npi_selection_parent_unmodeled', expression_kind=kind, parent_kind=parent_kind)
         parent_size, rows, complete = parts(parent, depth + 1)
         decl_left, decl_right = packed_range(parent, parent_size, depth)
         if kind == 'npiPartSelect':
@@ -144,7 +149,7 @@ def scan_native_ports(provider, options):
                          and isinstance(parent_path, str) and parent_path and path.startswith(parent_path)) else ''
                 if (len(suffix) > 32 or not re.fullmatch(r'\[-?(?:0|[1-9][0-9]*)\]', suffix)
                         or kind == 'npiBitSelect' and p.scalar(handle, 'constant_select') != 1):
-                    raise _UnsupportedPort('npi_selection_index_unavailable')
+                    raise _UnsupportedPort('npi_selection_index_unavailable', expression_kind=kind, parent_kind=parent_kind)
                 left = right = int(suffix[1:-1])
         if not (min(decl_left, decl_right) <= min(left, right)
                 <= max(left, right) <= max(decl_left, decl_right)):
@@ -183,7 +188,7 @@ def scan_native_ports(provider, options):
         if kind in _DYNAMIC:
             return size, [], False
         if kind != 'npiOperation':
-            gap('npi_expression_unmodeled', ['constant_connection'])
+            gap('npi_expression_unmodeled', ['constant_connection'], expression_kind=kind)
             return size, [], False
         op = p.scalar(handle, 'op_type')
         it = _LanguageIterator(p, p.low.Operand, handle)
@@ -199,7 +204,7 @@ def scan_native_ports(provider, options):
         finally:
             p.close_iterator(it)
         if not operands:
-            gap('npi_expression_unmodeled', ['constant_connection'])
+            gap('npi_expression_unmodeled', ['constant_connection'], expression_kind=kind, operator=op)
             return size, [], False
         if all(complete for _, _, complete in operands):
             bits = binary(handle, size)
@@ -212,7 +217,7 @@ def scan_native_ports(provider, options):
                 regions.extend(dict(r, lsb_offset=r['lsb_offset'] + offset) for r in rows)
                 offset += w
             return size, regions, False
-        gap('npi_expression_unmodeled', ['constant_connection'])
+        gap('npi_expression_unmodeled', ['constant_connection'], expression_kind=kind, operator=op)
         return size, [], False
 
     def location(handle, inst=False):
@@ -246,6 +251,7 @@ def scan_native_ports(provider, options):
                 if ports >= budget.max_symbols:
                     raise HierarchyBudgetExceeded('native_port_limit')
                 ports += 1
+                diagnostics.end_port()
                 direction = p.scalar(port, 'direction')
                 if direction != 'npiInput':
                     if direction not in {'npiOutput', 'npiInout', 'npiRef'}:
@@ -254,6 +260,7 @@ def scan_native_ports(provider, options):
                 name = p.scalar(port, 'name')
                 if not isinstance(name, str) or not name:
                     gap('npi_port_identity_unavailable'); continue
+                diagnostics.begin_port(path, name)
                 actual = p.one(port, 'high_conn_handle')
                 loc = location(port, True)
                 base = dict(instance=path, port=name, source=loc,
@@ -276,14 +283,15 @@ def scan_native_ports(provider, options):
                     size, regions, _ = parts(actual)
                     port_width = width(port)
                 except _UnsupportedPort as exc:
-                    gap(exc.reason, ['constant_connection'])
+                    gap(exc.reason, ['constant_connection'], **exc.details)
                     continue
                 if size != port_width:
-                    gap('npi_contextual_width_conversion_unverified', ['constant_connection'])
+                    gap('npi_contextual_width_conversion_unverified', ['constant_connection'], actual_width=size, port_width=port_width)
                     continue
                 if regions:
                     save('constant_connection', **base, width=port_width, constant_regions=regions)
         finally:
+            diagnostics.end_port()
             p.close_iterator(it)
 
     def visit(handle, path, depth):
@@ -343,6 +351,7 @@ def scan_native_ports(provider, options):
     return dict(status='partial' if all_gaps else 'complete', scope=options.get('scope'),
                 artifact_identity=p.artifact_identity, capability_version=CAPABILITY_VERSION,
                 categories_checked=sorted(categories), category_results=results, gaps=all_gaps,
+                gap_summary=diagnostics.result(),
                 facts=facts, total_facts=len(facts), counts=dict(Counter(f['kind'] for f in facts)),
                 instances_visited=budget.scope_count, query_metrics={}, analysis_limits=[], coverage_status='partial' if all_gaps else 'complete',
                 limitations=['kdb_source_association_unverified', 'native_positions_not_current_source_validation',

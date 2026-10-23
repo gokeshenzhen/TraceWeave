@@ -47,6 +47,7 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
             "status": raw["status"], "categories_checked": raw.get("categories_checked", []),
             "selected_categories": [], "total_facts": raw.get("total_facts", 0),
             "gaps": raw.get("gaps", []), "limitations": raw.get("limitations", []),
+            "gap_summary": copy.deepcopy(raw.get("gap_summary", [])),
         })
     for category in categories:
         nr, sr = category_result(native, category), category_result(source, category)

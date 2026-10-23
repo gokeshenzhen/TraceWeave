@@ -2828,6 +2828,12 @@ preserve the selected top, evidence domain and identity; native groups also reta
 the bounded KDB/load binding, load quality and source-association limitation.
 Complete means every requested category was checked in its declared domain, not
 that the design is defect-free. An unstarted category has no checked scope.
+Native result groups also expose `gap_summary`: occurrences, affected-port
+counts (deduplicated per port/reason), and at most two examples per reason,
+16 overall. Examples contain bounded instance/port and native type/operator/
+width observations, never runtime values. Global stops do not count as affected
+ports. Output trimming can omit examples or the summary and marks that omission;
+it does not change category coverage. These diagnostics are not telemetry.
 
 One category selects one inventory: complete NPI has priority; a complete source
 pass can replace partial NPI for that category; two partial inventories are not

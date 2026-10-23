@@ -50,9 +50,19 @@ def validate_scan_worker_result(request, result):
     allowed = {'status', 'scope', 'artifact_identity', 'capability_version', 'categories_checked',
                'category_results', 'gaps', 'facts', 'total_facts', 'counts', 'instances_visited',
                'analysis_limits', 'coverage_status', 'limitations', 'metrics', 'kdb_binding',
-               'request_fingerprint', 'selected_top'}
+               'request_fingerprint', 'selected_top', 'gap_summary'}
     if set(result) != allowed or result['status'] not in {'complete', 'partial'}:
         raise ValueError('invalid scan receipt fields')
+    from .schemas import StructuralGapSummary
+    summary = result['gap_summary']
+    if not isinstance(summary, list) or len(summary) > 64:
+        raise ValueError('invalid scan gap summary')
+    for row in summary:
+        StructuralGapSummary.model_validate(row)
+        if row['affected_ports'] > row['occurrences'] or row['reason'] not in result['gaps']:
+            raise ValueError('inconsistent scan gap summary')
+    if sum(len(row['examples']) for row in summary) > 16:
+        raise ValueError('unbounded scan gap examples')
     binding = result['kdb_binding']
     if (binding.get('identity_sha256') != request.kdb_identity_sha256 or binding.get('load_status') != 'loaded'
             or binding.get('identity_status') != 'complete' or binding.get('load_quality') not in {'clean', 'degraded'}

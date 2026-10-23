@@ -116,3 +116,15 @@ def test_bounded_handle_stop_preserves_exact_attempt_count(tmp_path, monkeypatch
     for row in raw['category_results'].values():
         row.update(status='partial', gaps=['native_handle_limit'])
     assert scan.validate_scan_worker_result(req, raw)['metrics']['native_handle_count'] == 16385
+
+
+def test_worker_rejects_unbounded_or_unrelated_diagnostics(tmp_path, monkeypatch):
+    req, _, _, _ = request(tmp_path)
+    raw = deepcopy(worker(req, monkeypatch).result)
+    row = dict(reason='npi_expression_unmodeled', occurrences=1, affected_ports=1,
+               examples=[dict(instance='top.u', port='a')], examples_truncated=False)
+    raw['gap_summary'] = [row]
+    with pytest.raises(ValueError): scan.validate_scan_worker_result(req, raw)
+    raw['gaps'] = [row['reason']]; raw['status'] = 'partial'
+    row['examples'] *= 3
+    with pytest.raises(ValueError): scan.validate_scan_worker_result(req, raw)

@@ -263,3 +263,21 @@ def test_ambiguous_or_out_of_range_slices_preserve_partial_coverage():
     live.data['typespec_handle'].data['Range'] = [Handle(left_range_handle=const('xx'))]
     _, r = run([port('a', part(live, 5, 2))], semantic_categories=['constant_connection'])
     assert r['status'] == 'partial' and not r['facts']
+
+
+def test_gap_summary_counts_ports_once_and_bounds_examples():
+    unknown = Handle(type='npiFuncCall', size=2)
+    expr = Handle(type='npiOperation', op_type='npiConcatOp', size=4, Operand=[unknown, unknown])
+    _, r = run([port(str(i), expr) for i in range(20)], semantic_categories=['constant_connection'])
+    row, = r['gap_summary']
+    assert row['reason'] == 'npi_expression_unmodeled'
+    assert row['occurrences'] == row['affected_ports'] == 20
+    assert len(row['examples']) == 2 and row['examples_truncated']
+    assert row['examples'][0] == dict(instance='top.u', port='0', expression_kind='npiFuncCall')
+
+
+def test_global_work_stop_is_not_an_affected_port():
+    p = Provider([]); p.budget.max_scopes = 1
+    r = scan_native_ports(p, p.options)
+    assert r['gap_summary'] == [dict(reason='scope_limit', occurrences=1,
+        affected_ports=0, examples=[], examples_truncated=False)]
