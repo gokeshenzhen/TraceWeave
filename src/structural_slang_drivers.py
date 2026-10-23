@@ -145,15 +145,26 @@ class _Inventory:
             self.writers.setdefault(self.root(bit), set()).add(identity)
 
     def block(self, node, instance, reason):
-        self.gaps.add(reason)
         names = set()
+        automatic, other = False, False
         def visit(n):
+            nonlocal automatic, other
             self.tick()
             if type(n).__name__ in {'NamedValueExpression', 'HierarchicalValueExpression'}:
+                symbol = n.symbol
+                if type(symbol).__name__ == 'VariableSymbol' and symbol.lifetime.name == 'Automatic':
+                    automatic = True
+                    return
+                other = True
                 name = self.signal(n.symbol)
                 if name:
                     names.add(name)
         node.visit(visit)
+        # Automatic subroutine state is outside the persistent signal inventory.
+        # Its local writes cannot invalidate absence proofs for module signals.
+        if automatic and not other:
+            return
+        self.gaps.add(reason)
         for name in names:
             self.blocked.update((name, b) for b in self.signals[name].bits)
         if not names:

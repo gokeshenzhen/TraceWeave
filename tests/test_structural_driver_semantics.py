@@ -165,6 +165,15 @@ assign y=f(a);assign z=g(a);endmodule''')
     assert not any(f['kind']=='undriven_signal' for f in result['facts'])
 
 
+def test_automatic_local_writes_do_not_invalidate_module_absence_proofs(tmp_path):
+    result=scan(tmp_path,'''module top(input a,output y,z);
+wire missing;
+function automatic logic f(input b);logic t; t=b;return t;endfunction
+assign y=f(a);assign z=missing;endmodule''')
+    assert result['status']=='complete',result['gaps']
+    assert [(f['signal'],f['target_bits']) for f in result['facts']]==[('missing',[0])]
+
+
 @pytest.mark.anyio
 async def test_public_deep_driver_categories_and_auto_result_reuse(tmp_path, monkeypatch):
     import server
