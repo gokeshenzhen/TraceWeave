@@ -2938,6 +2938,31 @@ bound or a general memory-improvement claim. Native/source identity checks,
 per-page call/time limits and frontier/handle caps were retained. These are
 single-workload measurements, not a guarantee for another SoC or license setup.
 
+For opt-in phase profiling through a separate stdio MCP process:
+
+```bash
+.venv/bin/python scripts/profile_structural_scan.py \
+  --compile-log /path/to/build.log --top tb --scope tb.dut \
+  --profile --output /tmp/structural-profile
+```
+
+Omit `--profile` and use a different output directory for an uninstrumented
+control. Both runs retain the normal native/source routes, budgets and
+continuation protocol; default work is the two native port categories, 15s/page,
+1,000 scopes initially and 25,000 thereafter, at most 120 calls. `run.json`
+contains public-call latencies and bounded numeric/hash receipts; `profile.json`
+contains per-call fixed phase names, parent phases, counts, inclusive wall times,
+errors and successful file-validation logical bytes. Nested timings must not be
+added to their parents; direct children of `dispatch` provide a disjoint view of
+the main stages. File-validation bytes are repeated logical work, not physical
+disk I/O. Local native facts are hashed before public trimming for equivalence;
+`local_native_queries=0` means that oracle observed no local native query.
+LSF/Slang worker internals are not instrumented. Normal server processes are
+unchanged; no per-signal/native-call logging or argument/source text enters the
+profile. Reports are private local files and the existing MCP stdout isolation
+remains in effect. Measure control/profile separately to quantify instrumentation
+overhead before drawing performance conclusions.
+
 ### Continuing a bounded native scan
 
 A work-limited scan that made progress returns `semantic.continuation` and a
