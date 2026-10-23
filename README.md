@@ -139,6 +139,16 @@ in the MCP server environment and restart or reconnect the server. Explicit
 `scan_structural_risks` requests remain available; skipped checks remain unchecked.
 Handshake scanning and per-call scan modes are unchanged.
 
+For bit-level multiple-driver and undriven-signal checks, explicitly pass
+`semantic_categories=["multiple_driver", "undriven_signal"]` to
+`scan_structural_risks`, optionally with `semantic_scope="tb.dut.u_block"`.
+Both NPI and Slang support these categories: `auto` prioritizes an existing KDB
+and otherwise reuses compatible source results; `deep` also permits a Slang build.
+The category list replaces the defaults. Facts report static writers and proved
+empty inventories for consumed bits; runtime contention is not checked. Read
+coverage and gaps before interpreting zero findings. See the
+[driver checks reference](docs/architecture.md#bit-level-driver-checks) for limits.
+
 Try a more focused question:
 
 - **Find a mismatch:** “Compare `tb.dut.result` in these two waveforms and trace the logic producing the difference on each side.”
@@ -178,7 +188,7 @@ Describe your debugging goal and let the assistant choose the tools. All tools a
 |  | `analyze_failures` | Combine log and waveform evidence for a failure group |
 |  | `analyze_failure_event` | Correlate one failure with instance, signal, and source leads |
 |  | `recommend_failure_debug_next_steps` | Suggest investigation targets and next tool calls |
-| Structure and tracing | `scan_structural_risks` | Scan text rules and NPI port facts; deep can supplement source semantics |
+| Structure and tracing | `scan_structural_risks` | Scan text rules; check port facts and optional bit-level drivers with NPI / Slang |
 |  | `explain_signal_driver` | Trace signal drivers and source locations |
 |  | `find_signal_loads` | Find signal consumers and loads |
 |  | `trace_signal_path` | Query structural connectivity between signals |

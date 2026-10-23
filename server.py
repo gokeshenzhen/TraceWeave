@@ -6861,7 +6861,10 @@ async def list_tools():
                 "also tries existing/cached KDBs through Verdi NPI, then reuses compatible source semantic "
                 "results for missing categories without a cold Slang build. deep also allows bounded Slang "
                 "supplementation. NPI may request a license locally or through configured LSF; scans never build "
-                "a KDB. Native checks cover elaborated input-port bindings, with explicit unsupported/default/width gaps. "
+                "a KDB. Native checks cover elaborated input-port bindings and explicitly requested bit-level "
+                "multiple_driver / undriven_signal checks; Slang also supports both driver categories. "
+                "Driver facts describe the observed static model, not runtime contention; an undriven fact requires "
+                "a complete empty inventory for the reported bits. Unsupported constructs remain gaps. "
                 "Read lexical_coverage_status, semantic.category_coverage, result_groups and gaps separately; "
                 "zero_coverage scanned no supported sources. "
                 "Zero risks, cached facts and not_run do not establish semantic completeness. These are investigation "
@@ -6892,7 +6895,7 @@ async def list_tools():
                         "description": "Optional list of risk categories to scan. If omitted, all categories are scanned.",
                     },
                     "analysis_mode": {"type": "string", "enum": ["fast", "auto", "deep"], "default": "auto"},
-                    "semantic_categories": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}, "description": "Defaults to constant_connection, open_input, constant_comparison. Request propagated_constant and/or constant_control explicitly for bounded cross-hierarchy analysis."},
+                    "semantic_categories": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}, "description": "Replaces defaults: constant_connection, open_input, constant_comparison. Explicit multiple_driver / undriven_signal checks use bit-level static driver inventories through NPI or Slang. Request propagated_constant / constant_control explicitly for bounded cross-hierarchy propagation."},
                     "semantic_scope": {"type": "string", "description": "Exact elaborated instance path and its descendants; omitted scans all elaborated tops."},
                     "semantic_continuation": {"type": "string", "minLength": 32, "maxLength": 32,
                         "description": "Process-local token from semantic.continuation. Resume the same native inventory with unchanged compile log, top, scope and categories. Work budgets may change. Tokens expire after 10 minutes and are consumed on success."},

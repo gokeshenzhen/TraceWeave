@@ -2551,6 +2551,59 @@ retains those Slang capabilities. An `auto` cache miss cannot cover a comparison
 Scope limits basic source fact extraction, not necessarily frontend elaboration;
 these modes do not require a full-design ConnectivityIR build.
 
+### Bit-level driver checks
+
+Both NPI and Slang support the explicitly requested categories
+`multiple_driver` and `undriven_signal`; defaults are unchanged:
+
+```json
+{
+  "compile_log": "/path/to/build.log",
+  "top_hint": "tb",
+  "semantic_scope": "tb.dut.u_block",
+  "semantic_categories": ["multiple_driver", "undriven_signal"],
+  "analysis_mode": "deep"
+}
+```
+
+Normal mode routing applies: NPI has priority, `auto` only reuses compatible
+source results, and `deep` permits a bounded Slang build. No driver-tool subcall
+or waveform read is required. Facts use `evidence_domain="elaborated_static_drivers"`,
+an exact `signal_path` and `target_bits` in declared coordinates, preserving
+ascending and descending ranges. `multiple_driver` requires at least two known
+independent sources. Repeated writes to the same bit in one process count once;
+different output bits wired onto one net retain distinct identities. The
+`driver_count` is a lower bound when `driver_inventory_complete=false`.
+`undriven_signal` requires a complete empty inventory for the reported consumed
+or externally observable bits; unused wires and unknown driver sets are not
+reported as undriven. Driver evidence is capped at 32 rows per fact, with
+`driver_evidence_truncated` separate from the count. Both categories report
+`runtime_conflict_checked=false`: resolved nets, conditional enables and runtime
+force/DPI/class writes require further investigation before assigning a defect.
+
+NPI enumerates integral declarations through Language and queries each bit's
+direct Netlist drivers and loads in the existing native owner. Consumer aliases
+are checked against the same net's original load inventory, never recursive
+fan-in. Undriven proofs require a healthy, non-black-box module boundary and an
+internal wire/tri/uwire with known bounds and observed loads. Input/inout/ref
+boundaries, variable state, unknown resolution and unsupported declarations remain
+excluded or gaps. Endpoint inventories are capped at 256 copied entries;
+unverified driver/process mappings cannot establish absence. Native facts retain
+the KDB's unverified source association. Signal/bit positions participate in
+bounded continuation, including pages with no findings.
+
+Slang inventories static assignments, procedural processes and port bindings
+over all elaborated tops, even when output is scoped: siblings can write
+hierarchical targets. Static net-port collapse shares per-bit writer sets.
+Initial state, dynamic write targets, interface runtime state and unmodeled
+subroutine side effects block affected absence proofs. Unresolved global writes,
+blocking frontend diagnostics or an interrupted inventory prevent negative
+proofs; known multiple-driver positives may remain. Unsupported shapes and
+constructs stay explicit gaps. The inventory shares the instance/AST/fact and
+isolated time/RSS limits, and uses `semantic_max_propagation_bits` and
+`semantic_max_propagation_steps` for its signal-bit and work bounds. A scoped
+request therefore does not guarantee a small frontend or a completed inventory.
+
 ### Native port facts and coverage
 
 `npi_structural_scan.py` walks actual elaborated instances and active generate
@@ -2581,7 +2634,7 @@ a contextual-conversion gap. Variable indexes, out-of-range selections and
 unresolved or unsupported multidimensional types remain gaps. Procedural
 `For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
 `GenScope` instances are still visited. The native capability receipt is
-`npi_input_ports_v7`. Known index/range values with a leading zero have the same
+`npi_structural_v8`. Known index/range values with a leading zero have the same
 nonnegative interpretation with either signedness; high-bit values still require
 verified signedness. Four-state transfer functions model bitwise operations,
 logical not/and/or, reductions, conditional merging and bounded replication.
@@ -2659,7 +2712,7 @@ A failed reused backend is discarded so later requests can try again.
 
 `semantic_max_instances` bounds native visited scopes (including generate scopes);
 `semantic_max_facts` bounds each native page (and each source extraction). Native work additionally caps explicit
-calls at 100,000, ports at 100,000, hierarchy depth at 128, expression depth at 64,
+calls at 100,000, combined ports/driver bits at 100,000, hierarchy depth at 128, expression depth at 64,
 operands at 256, widths at 4,096, handles at 16,384 per batch, and estimated page
 fact storage at 8 MiB. The scan copies paths/positions and expands siblings in
 batches of at most 64, falling back to 32 once queued paths use a quarter of the
@@ -2674,7 +2727,8 @@ acquisitions, peak per batch and batch count. One final handle may be observed
 while detecting a batch cap; a bounded retry requires actual release/progress.
 Expression depth/operand stops are port gaps and do not block unrelated ports.
 Work metrics identify
-native calls/ports/scopes separately from Slang AST visits. `semantic_max_rss_mib`
+native calls/ports/scopes separately from Slang AST visits; driver checks add
+`native_driver_bit_count`. `semantic_max_rss_mib`
 bounds the isolated Slang worker, not local NPI; process RSS can grow with a loaded KDB.
 No hard native RSS isolation is claimed.
 
@@ -2700,7 +2754,7 @@ after a successfully validated response. Restart, expired/consumed tokens or
 changed metadata/KDB/policy/domain terminate continuation without source fallback.
 Cancellation preserves the old token for an explicit retry. The event-loop-owned
 store caps 16 entries / 16 MiB, with at most 1 MiB / 8,192 pending frames per
-inventory. It retains only copied paths, port/child positions and prefix
+inventory. It retains only copied paths, port/signal/bit/child positions and prefix
 fingerprints, cumulative counts
 and bounded gap diagnostics, never native objects or source bodies. No-progress
 or irreducible stops report `scan_progress.status="blocked"` without a token.

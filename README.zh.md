@@ -135,6 +135,14 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 在 MCP 服务环境中设置 `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`，然后重启或重新连接服务。
 仍可明确要求调用 `scan_structural_risks`；跳过代表未检查。握手扫描和单次扫描模式不受影响。
 
+检查位级多驱和无驱时，向 `scan_structural_risks` 显式传入
+`semantic_categories=["multiple_driver", "undriven_signal"]`，可用
+`semantic_scope="tb.dut.u_block"` 选择关注范围。NPI 和 Slang 均支持：`auto`
+优先使用现成 KDB，否则仅复用兼容源码结果；`deep` 还允许构建 Slang 语义。
+类别列表替换默认选择。结果描述静态驱动来源，以及有消费者的位上已证明为空的驱动清单，
+不判定运行时冲突。零发现须结合覆盖状态和缺口解读，边界见
+[位级驱动检查](docs/architecture.md#bit-level-driver-checks)。
+
 也可以从具体问题开始：
 
 - **定位差异：**“比较这两份波形中的 `tb.dut.result`，分别追踪造成差异的数据与控制逻辑。”
@@ -174,7 +182,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 |  | `analyze_failures` | 关联一组失败的日志与波形证据 |
 |  | `analyze_failure_event` | 关联单个失败的实例、信号与源码线索 |
 |  | `recommend_failure_debug_next_steps` | 推荐调查目标与后续工具调用 |
-| 结构与追踪 | `scan_structural_risks` | 执行文本规则及 NPI 端口检查，deep 可补齐源码语义 |
+| 结构与追踪 | `scan_structural_risks` | 执行文本规则，通过 NPI / Slang 检查端口及可选的位级驱动 |
 |  | `explain_signal_driver` | 追踪信号驱动及源码位置 |
 |  | `find_signal_loads` | 查找消费者与负载 |
 |  | `trace_signal_path` | 查询信号间的结构连通路径 |

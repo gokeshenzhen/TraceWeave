@@ -3,7 +3,7 @@
 Verified against Verdi V-2023.12-SP2: Port/HighConn/LowConn, PortInstFile/
 LineNo, InternalScope and BinStrVal. A missing HighConn alone is NOT open.
 Default-port semantics and contextual width conversion remain explicit gaps.
-No source reading, driver traversal, waveform access or design building occurs.
+No source reading, recursive fan-in, waveform access or design building occurs.
 """
 from __future__ import annotations
 
