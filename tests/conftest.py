@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytest_plugins = ["scripts.pytest_profiles"]
+
 # 测试绝不能写入真实的用户遥测文件：走 server.call_tool 的测试（如
 # TestCallToolErrors）会触发真实的 record_call 落盘，曾把每次 pytest 运行
 # 都变成 ~/.cache/traceweave/telemetry/usage.jsonl 里的一个假"失败会话"，
