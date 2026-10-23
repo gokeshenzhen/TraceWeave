@@ -296,12 +296,37 @@ class FixtureCache:
         self.get('override-'+variable.lower(), identity([external], variable=variable), validate)
         return external
 
+    def vcs_design(self, name, sources, top, *, simulate=False, kdb=True):
+        vcs = Path(shutil.which('vcs'))
+        inputs = identity([vcs], sources=sources, top=top, simulate=simulate, kdb=kdb,
+                          cache_root=str(self.root.resolve()), vcs_home=os.environ.get('VCS_HOME'),
+                          verdi_home=os.environ.get('VERDI_HOME'), flags='full64+sverilog+1ns/1ps+debug_access+all')
+        def build(path):
+            files = []
+            for filename, text in sources.items():
+                source = path/filename
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(text); files.append(source)
+            command = [vcs, '-full64', '-sverilog', '-timescale=1ns/1ps', '-debug_access+all']
+            if kdb:
+                command += ['-kdb']
+            command += files + ['-top', top, '-o', 'simv', '-l', 'compile.log']
+            compilation = run(command, path, timeout=90)
+            if kdb and not (path/'simv.daidir/kdb.elab++').is_dir():
+                raise RuntimeError('VCS did not produce the required KDB')
+            simulation = run([path/'simv', '-no_save', '-l', 'sim.log'], path, timeout=30,
+                             label='simulation') if simulate else None
+            return dict(compilation=compilation, simulation=simulation,
+                        actual_simulation=simulate, live_scheduler=False)
+        return self.get(name, inputs, build)
+
 
 def prepare_for_tests(selected, cache_dir=None):
     """Prepare only selected capabilities; further input families are demand loaded."""
     if not any(row['layer'] in ('eda', 'stress') for row in selected):
         return []
-    cache = FixtureCache(cache_dir)
+    global _current_cache
+    cache = _current_cache = FixtureCache(cache_dir)
     wrapper = cache.wrapper()
     os.environ['TW_COUNT_INDEX_WRAPPER'] = str(wrapper)
     from src import fsdb_parser
@@ -332,4 +357,24 @@ def prepare_for_tests(selected, cache_dir=None):
                 records=600001 if name == 'wide_256_reclaim' else
                     {'protocol_small': 513, 'protocol_complete': 65537, 'protocol_large': 262145}[name],
                 multisession=name == 'wide_256_reclaim'))
+    if any('real_verdi_runtime' in r.get('fixtures', []) for r in selected):
+        sources = {'native_connections.sv': (ROOT/'tests/fixtures/native_connections.sv').read_text()}
+        path = cache.vcs_design('native-connections', sources, 'top_tb')
+        os.environ['TW_NPI_COMPILE_LOG'] = str(path/'compile.log')
+    if any('test_deep_x_npi_integration.py::' in r['nodeid'] for r in selected):
+        base = ROOT/'tests/fixtures/deep_x_npi'
+        sources = {name: (base/name).read_text() for name in ('rtl/deep_uart_x.sv', 'tb/deep_x_tb.sv')}
+        path = cache.vcs_design('deep-x', sources, 'uart_deep_x_tb', simulate=True)
+        if not (path/'deep_x.fsdb').is_file():
+            raise RuntimeError('deep-X simulation did not produce its FSDB')
+        os.environ['TW_DEEP_X_WORK'] = str(path)
     return cache.receipts
+
+
+_current_cache = None
+
+
+def current_cache():
+    if _current_cache is None:
+        raise RuntimeError('real EDA fixture requested outside an explicit EDA profile')
+    return _current_cache

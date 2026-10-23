@@ -16,6 +16,7 @@ def pytest_addoption(parser):
     group.addoption('--tw-report', type=str)
     group.addoption('--tw-plan-only', action='store_true')
     group.addoption('--tw-cache-dir', type=str)
+    group.addoption('--tw-external-representative', type=str)
 
 
 def pytest_configure(config):
@@ -36,14 +37,14 @@ def pytest_collection_modifyitems(config, items):
                            eda_marker=item.get_closest_marker('eda_integration') is not None)
         entry = {'nodeid': item.nodeid, 'layer': layer, 'fixtures': sorted(item.fixturenames)}
         layers[item.nodeid] = layer
-        if layer in PROFILES[profile]:
+        if layer in PROFILES[profile] or (layer == 'external' and config.getoption('--tw-external-representative')):
             selected.append(item)
             config._tw_report['selected'].append(entry)
         else:
             excluded.append(item)
             config._tw_report['excluded'].append(entry)
     # Run the three layers serially, each node exactly once.
-    selected.sort(key=lambda item: ('portable', 'eda', 'stress').index(layers[item.nodeid]))
+    selected.sort(key=lambda item: ('portable', 'eda', 'stress', 'external').index(layers[item.nodeid]))
     items[:] = selected
     config.hook.pytest_deselected(items=excluded)
 

@@ -259,17 +259,18 @@ def test_env_warnings_present_when_missing(tmp_path, monkeypatch):
     assert "LICENSE" in status["kdb_hint"]
 
 
-def test_real_cc20_case_when_available():
-    """When the cc20 fixture case is present locally, probe should succeed."""
-    cc20_log = "/home/robin/Projects/mcp_practise/uvm_demo_cc20/tb/comp.log"
-    if not os.path.exists(cc20_log):
-        pytest.skip("cc20 fixture unavailable")
+def test_generated_compile_metadata_probe(tmp_path):
+    """Compile metadata probing needs neither a private project nor a license."""
     from src.compile_log_parser import parse_compile_log
-
-    cr = parse_compile_log(cc20_log, "vcs")
-    status = probe_verdi_backend(cr, cc20_log)
+    source = tmp_path / 'top.sv'
+    source.write_text('module top_tb; endmodule\n')
+    log = tmp_path / 'compile.log'
+    log.write_text(f"Command: vcs -full64 -sverilog {source} -top top_tb -o simv\n"
+                   f"Parsing design file '{source}'\nTop Level Modules:\n       top_tb\n")
+    cr = parse_compile_log(str(log), "vcs")
+    assert cr['top_modules'] == ['top_tb']
+    status = probe_verdi_backend(cr, str(log))
     assert status["simulator"] == "vcs"
-    # KDB may or may not exist; just sanity-check the shape.
     assert status["kdb_flow"] in ("vcs_two_step", "vcs_three_step", "none")
 
 

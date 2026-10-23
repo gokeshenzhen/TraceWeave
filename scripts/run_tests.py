@@ -23,6 +23,7 @@ def main(argv=None):
     cli.add_argument('--check', action='store_true', help='read-only prerequisite check; no license checkout')
     cli.add_argument('--output', type=Path, help='new evidence directory (must not exist)')
     cli.add_argument('--cache-dir', type=Path, help='owned fixture cache, validated before reuse')
+    cli.add_argument('--external-representative', type=Path, help='explicit read-only external project manifest')
     cli.add_argument('pytest_args', nargs=argparse.REMAINDER)
     args = cli.parse_args(argv)
     missing = prerequisites(args.profile)
@@ -34,7 +35,7 @@ def main(argv=None):
     if args.output:
         output.mkdir(parents=True, exist_ok=False)
     report = {'profile': args.profile, 'command': sys.argv, 'missing': missing,
-              'layers': sorted(PROFILES[args.profile]), 'external_projects': 'not_requested',
+              'layers': sorted(PROFILES[args.profile]), 'external_projects': str(args.external_representative) if args.external_representative else 'not_requested',
               'live_lsf_scheduler': 'not_requested', 'status': 'incomplete'}
     for name, command in [('head', ['git', 'rev-parse', 'HEAD']),
                           ('worktree_status', ['git', 'status', '--porcelain=v1'])]:
@@ -52,6 +53,8 @@ def main(argv=None):
                 command += ['--collect-only', '-q']
             if args.cache_dir:
                 command += ['--tw-cache-dir', str(args.cache_dir.resolve())]
+            if args.external_representative:
+                command += ['--tw-external-representative', str(args.external_representative.resolve())]
             extra = args.pytest_args
             if extra[:1] == ['--']:
                 extra = extra[1:]

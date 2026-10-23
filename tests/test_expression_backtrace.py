@@ -24,17 +24,13 @@ def anyio_backend():
 def native_design(tmp_path_factory):
     if os.environ.get('TRACEWEAVE_TEST_NPI_DYNAMIC') != '1':
         pytest.skip('set TRACEWEAVE_TEST_NPI_DYNAMIC=1 for live VCS/NPI oracle')
-    root = tmp_path_factory.mktemp('expression_npi')
     ports = [f"input logic {'signed' if v.get('signed') else ''} [{v['width']-1}:0] {n}"
              for n,v in cases()[0]['inputs'].items()]
     ports += [f"output wire [{c['expected']['width']-1}:0] y_{c['id']}" for c in cases()]
     source = 'module expression_probe('+','.join(ports)+');\n'+ '\n'.join(
         f"assign y_{c['id']}=({c['expression']});" for c in cases())+'\nendmodule\n'
-    src = root/'oracle.sv';src.write_text(source)
-    command = ['vcs','-full64','-sverilog','-timescale=1ns/1ps','-debug_access+all','-kdb',
-               str(src),'-top','expression_probe','-o','simv','-l','compile.log']
-    run = subprocess.run(command,cwd=root,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=90)
-    assert run.returncode==0,run.stdout[-3000:]
+    from scripts.test_fixtures import current_cache
+    root = current_cache().vcs_design('expression-native', {'oracle.sv': source}, 'expression_probe')
     return root,source
 
 

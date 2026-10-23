@@ -1,27 +1,14 @@
 {
-  "name": "opentitan",
-  "paths": {
-    "verif_root": "/home/robin/Projects/mcp/TraceWeave/docs/2026-10-19-daily-source-entry-execution/fixtures",
-    "compile_log": "/home/robin/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/build.log",
-    "sim_log": "/home/robin/Projects/mcp/TraceWeave/docs/2026-10-19-daily-source-entry-execution/fixtures/opentitan.log",
-    "wave_file": "/home/robin/Projects/mcp/TraceWeave/docs/2026-10-19-daily-source-entry-execution/fixtures/opentitan.vcd"
-  },
+  "version": "REPLACE_WITH_PROJECT_REVISION",
   "top": "tb",
   "simulator": "vcs",
-  "source": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_ip_uart_0.1/rtl/uart_core.sv",
+  "paths": {"compile_log": "/absolute/path/to/build.log"},
+  "compile_log_sha256": "REPLACE_WITH_SHA256",
+  "source": "/absolute/path/to/uart_core.sv",
+  "source_sha256": "REPLACE_WITH_SHA256",
   "line": 10,
-  "site": "/cache/Projects/opentitan/out/dvsim/master/chip_earlgrey_asic-sim-vcs/default/fusesoc-work/src/lowrisc_ip_uart_0.1/rtl/uart.sv",
+  "site": "/absolute/path/to/uart.sv",
+  "site_sha256": "REPLACE_WITH_SHA256",
   "site_line": 74,
-  "target": "tb.dut.top_earlgrey.u_uart0.uart_core",
-  "driver_signal": "tb.dut.top_earlgrey.u_uart0.uart_core.tx_fifo_rready",
-  "driver_line": 183,
-  "fixture_note": "constructed log and waveform; existing compile inputs, no simulation or build",
-  "selection_stage": "before V1 behavioral execution",
-  "source_spec": "docs/2026-10-19-trace-packed-source-integration-execution/T3_opentitan.json",
-  "source_spec_sha256": "6876c7e8eddb779cca284a50e234cccb457d2517a0d6620c2afc5fc01cdf1ca0",
-  "historical_input_count": 2432,
-  "boundary": "Fixed local UART semantic declaration/instance/driver smoke only. Existing blocking frontend diagnostics are retained; constructed wave/log are not UART simulation evidence. No full-design clean or performance claim. Exact V3 commands/oracle/budgets require independent freeze.",
-  "historical_blocking_diagnostics": 79,
-  "historical_diagnostics_note": "Attributed original observation only. New counted run must retain and report its own actual diagnostic counts/gaps; partial expected, no forced79 equality.",
-  "new_oracle": "Require same selected UART definition/site from real Slang point/local subtree and file declaration, deep bounded output retained without whole-chip global count. No clean negative, no UART waveform/simulation claim."
+  "target": "tb.dut.top_earlgrey.u_uart0.uart_core"
 }

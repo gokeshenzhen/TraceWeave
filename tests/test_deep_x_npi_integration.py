@@ -20,10 +20,10 @@ from src.verdi_backend import probe_verdi_backend
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "deep_x_npi"
-WORK_DIR = FIXTURE_DIR / "work"
-COMPILE_LOG = WORK_DIR / "compile.log"
-FSDB = WORK_DIR / "deep_x.fsdb"
-KDB = WORK_DIR / "simv.daidir" / "kdb.elab++"
+WORK_DIR = None
+COMPILE_LOG = None
+FSDB = None
+KDB = None
 RTL = FIXTURE_DIR / "rtl" / "deep_uart_x.sv"
 TB = FIXTURE_DIR / "tb" / "deep_x_tb.sv"
 TOP = "uart_deep_x_tb"
@@ -64,6 +64,12 @@ def _result_dump(result) -> dict:
 
 @pytest.fixture(autouse=True)
 def _isolated_server_state():
+    global WORK_DIR, COMPILE_LOG, FSDB, KDB, RTL, TB
+    WORK_DIR = Path(os.environ['TW_DEEP_X_WORK'])
+    COMPILE_LOG = WORK_DIR / 'compile.log'
+    FSDB = WORK_DIR / 'deep_x.fsdb'
+    KDB = WORK_DIR / 'simv.daidir/kdb.elab++'
+    RTL, TB = WORK_DIR / 'rtl/deep_uart_x.sv', WORK_DIR / 'tb/deep_x_tb.sv'
     server.reset_session_state()
     yield
 
@@ -74,7 +80,7 @@ def _isolated_server_state():
 
 
 @pytest.mark.anyio
-async def test_public_trace_x_source_static_then_real_local_npi(monkeypatch):
+async def test_public_trace_x_source_static_then_real_local_npi(monkeypatch, tmp_path):
     """The same FSDB input exposes Static's blind spot and NPI's deep driver."""
 
     verdi_home_raw = os.environ.get("VERDI_HOME")
@@ -146,20 +152,27 @@ async def test_public_trace_x_source_static_then_real_local_npi(monkeypatch):
         static_patch.setattr(
             connectivity_backend,
             "select_backend",
-            lambda _status: connectivity_backend.StaticConnectivityBackend(),
+            lambda _status, **_kwargs: connectivity_backend.StaticConnectivityBackend(),
         )
         hierarchy = await server._dispatch(
             "build_tb_hierarchy",
             {"compile_log": str(COMPILE_LOG), "simulator": "vcs"},
         )
         assert hierarchy.project["top_module"] == TOP, _result_dump(hierarchy)
-        static_result = await server._dispatch("trace_x_source", trace_args)
+        prepared = await server._dispatch("prepare_design_context", {
+            "compile_log": str(COMPILE_LOG), "simulator": "vcs",
+            "top_hint": TOP, "backend_preference": "source",
+        })
+        static_result = await server._dispatch(
+            "trace_x_source", dict(trace_args, design_handle=prepared.design_handle))
 
     static_dump = _result_dump(static_result)
+    import json
+    (tmp_path / "static-trace.json").write_text(json.dumps(static_dump, indent=2))
     assert static_result.backend_status.backend == "source_graph", static_dump
     assert static_result.backend_status.selected_backend == "source_graph", static_dump
     assert static_result.backend_status.actual_backend == "static", static_dump
-    assert static_result.backend_status.fallback_reason == "npi_kdb_unavailable", static_dump
+    assert static_result.backend_status.fallback_reason == "source_backend_requested", static_dump
     assert any(
         attempt.backend == "source_graph"
         and attempt.status == "blocked"

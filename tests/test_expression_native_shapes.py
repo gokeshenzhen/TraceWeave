@@ -34,8 +34,7 @@ def test_vcs_dumped_array_and_struct_expressions(tmp_path):
         pytest.skip('set TRACEWEAVE_TEST_EXPRESSION_ORACLE=1 for simulator dump check')
     # Keep initialization outside the source projection: it supplies recorded
     # storage values, not a model that reconstructs storage writes.
-    src=tmp_path/'shapes.sv'
-    src.write_text(DESIGN+'''initial begin
+    design=DESIGN+'''initial begin
 $dumpfile("shapes.vcd"); $dumpvars(0,expression_shapes);
 $dumpvars(0,mem[2],mem[3],entries[2],entries[3]);
 $fsdbDumpfile("shapes.fsdb"); $fsdbDumpvars(0,expression_shapes); $fsdbDumpMDA();
@@ -47,15 +46,13 @@ packed_entries={5'b01010,5'b10101};
 #5 $finish;
 end
 endmodule
-''')
-    build=subprocess.run(['vcs','-full64','-sverilog','-timescale=1ns/1ps','-debug_access+all',
-        str(src),'-top','expression_shapes','-o','simv'],cwd=tmp_path,capture_output=True,text=True,timeout=60)
-    assert build.returncode==0,build.stdout+build.stderr
-    run=subprocess.run([str(tmp_path/'simv'),'-no_save'],cwd=tmp_path,capture_output=True,text=True,timeout=30)
-    assert run.returncode==0,run.stdout+run.stderr
+'''
+    from scripts.test_fixtures import current_cache
+    work = current_cache().vcs_design('expression-shapes', {'shapes.sv': design},
+                                      'expression_shapes', simulate=True, kdb=False)
     backend=project(DESIGN+'endmodule')
     for cls,suffix in ((VCDParser,'vcd'),(FSDBParser,'fsdb')):
-        parser=cls(str(tmp_path/f'shapes.{suffix}'))
+        parser=cls(str(work/f'shapes.{suffix}'))
         try:
             public = ExpressionParser(parser)
             # FSDB may expose a packed struct array only as separate fields;

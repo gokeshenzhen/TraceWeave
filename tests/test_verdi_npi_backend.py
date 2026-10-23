@@ -937,17 +937,19 @@ def test_backend_kind_filter_passed_through(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-_CC20_LOG = "/home/robin/Projects/mcp_practise/uvm_demo_cc20/tb/comp.log"
+_NPI_LOG = None
 
 
 @pytest.fixture
 def real_verdi_runtime():
+    global _NPI_LOG
+    _NPI_LOG = os.environ.get("TW_NPI_COMPILE_LOG")
     # Collection and ordinary unit regressions must not import the installed
     # SDK or checkout a license just because a local case happens to exist.
     if os.environ.get("TRACEWEAVE_RUN_EDA_INTEGRATION") != "1":
         pytest.skip("set TRACEWEAVE_RUN_EDA_INTEGRATION=1 for real NPI queries")
-    if not os.environ.get("VERDI_HOME") or not os.path.isfile(_CC20_LOG):
-        pytest.fail("explicit real NPI run requires VERDI_HOME and the cc20 compile log")
+    if not os.environ.get("VERDI_HOME") or not os.path.isfile(_NPI_LOG):
+        pytest.fail("explicit real NPI run requires VERDI_HOME and the generated compile log")
     from src.verdi_npi_backend import _import_pynpi
     if _import_pynpi() is None:
         pytest.fail("explicit real NPI run requires an importable pynpi SDK")
@@ -966,20 +968,20 @@ def test_real_npi_returns_more_loads_than_static_for_clk():
     from src.verdi_backend import probe_verdi_backend
     from src.compile_log_parser import parse_compile_log
 
-    cr = parse_compile_log(_CC20_LOG, "vcs")
-    status = probe_verdi_backend(cr, _CC20_LOG)
+    cr = parse_compile_log(_NPI_LOG, "vcs")
+    status = probe_verdi_backend(cr, _NPI_LOG)
     assert status["kdb_flow"] == "vcs_two_step"
 
     npi_backend = select_backend(status)
     assert npi_backend.name == "verdi_npi"
     npi_r = npi_backend.find_loads(
-        signal_path="top_tb.clk", compile_log=_CC20_LOG, simulator="vcs",
+        signal_path="top_tb.clk", compile_log=_NPI_LOG, simulator="vcs",
     )
     assert npi_r["completeness"] == "exact"
     npi_paths = {ld["load_path"] for ld in npi_r["loads"]}
 
     static_r = StaticConnectivityBackend().find_loads(
-        signal_path="top_tb.clk", compile_log=_CC20_LOG, simulator="vcs",
+        signal_path="top_tb.clk", compile_log=_NPI_LOG, simulator="vcs",
     )
     static_paths = {ld["load_path"] for ld in static_r["loads"]}
 
@@ -1588,19 +1590,20 @@ def test_real_npi_driver_resolves_clk_initial_block():
     from src.verdi_backend import probe_verdi_backend
     from src.compile_log_parser import parse_compile_log
 
-    cr = parse_compile_log(_CC20_LOG, "vcs")
-    status = probe_verdi_backend(cr, _CC20_LOG)
+    cr = parse_compile_log(_NPI_LOG, "vcs")
+    status = probe_verdi_backend(cr, _NPI_LOG)
     backend = select_backend(status)
     r = backend.find_driver(
         signal_path="top_tb.clk",
         wave_path="x.fsdb",
-        compile_log=_CC20_LOG,
+        compile_log=_NPI_LOG,
         simulator="vcs",
     )
     assert r["backend"] == "verdi_npi"
     assert r["driver_status"] == "resolved"
     assert r["driver_kind"] == "initial"
-    assert r["source_line"] == 53
+    assert r["source_line"] == 13
+    assert r["source_file"].endswith("native_connections.sv")
 
 
 @requires_verdi
@@ -1609,13 +1612,13 @@ def test_real_npi_driver_invert_recognised_as_register():
     from src.verdi_backend import probe_verdi_backend
     from src.compile_log_parser import parse_compile_log
 
-    cr = parse_compile_log(_CC20_LOG, "vcs")
-    status = probe_verdi_backend(cr, _CC20_LOG)
+    cr = parse_compile_log(_NPI_LOG, "vcs")
+    status = probe_verdi_backend(cr, _NPI_LOG)
     backend = select_backend(status)
     r = backend.find_driver(
         signal_path="top_tb.my_dut.invert",
         wave_path="x.fsdb",
-        compile_log=_CC20_LOG,
+        compile_log=_NPI_LOG,
         simulator="vcs",
     )
     assert r["backend"] == "verdi_npi"
@@ -1629,13 +1632,13 @@ def test_real_npi_driver_recursive_uses_fan_in():
     from src.verdi_backend import probe_verdi_backend
     from src.compile_log_parser import parse_compile_log
 
-    cr = parse_compile_log(_CC20_LOG, "vcs")
-    status = probe_verdi_backend(cr, _CC20_LOG)
+    cr = parse_compile_log(_NPI_LOG, "vcs")
+    status = probe_verdi_backend(cr, _NPI_LOG)
     backend = select_backend(status)
     r = backend.find_driver(
         signal_path="top_tb.my_dut.invert",
         wave_path="x.fsdb",
-        compile_log=_CC20_LOG,
+        compile_log=_NPI_LOG,
         simulator="vcs",
         recursive=True,
         max_depth=4,
@@ -1654,12 +1657,12 @@ def test_real_npi_normalizes_synthesized_paths_for_invert():
     from src.verdi_backend import probe_verdi_backend
     from src.compile_log_parser import parse_compile_log
 
-    cr = parse_compile_log(_CC20_LOG, "vcs")
-    status = probe_verdi_backend(cr, _CC20_LOG)
+    cr = parse_compile_log(_NPI_LOG, "vcs")
+    status = probe_verdi_backend(cr, _NPI_LOG)
     backend = select_backend(status)
     r = backend.find_loads(
         signal_path="top_tb.my_dut.invert",
-        compile_log=_CC20_LOG,
+        compile_log=_NPI_LOG,
         simulator="vcs",
     )
     assert r["completeness"] == "exact"

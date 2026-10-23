@@ -188,40 +188,12 @@ def real_kdbs(tmp_path_factory):
     assert shutil.which("vcs"), (
         "VCS is required for the explicitly requested live regression"
     )
-    root = tmp_path_factory.mktemp("npi_dynamic")
+    from scripts.test_fixtures import current_cache
     fixture = Path(__file__).parent / "fixtures/divergence/drivers.sv"
     outputs = []
     for index in (0, 1):
-        case = root / str(index)
-        case.mkdir()
-        src = case / "drivers.sv"
-        src.write_text(
-            fixture.read_text().replace("8'h00", "8'h11" if index else "8'h00")
-        )
-        command = [
-            "vcs",
-            "-full64",
-            "-sverilog",
-            "-timescale=1ns/1ps",
-            "-debug_access+all",
-            "-kdb",
-            str(src),
-            "-top",
-            "tw_div_probe",
-            "-o",
-            "simv",
-            "-l",
-            "compile.log",
-        ]
-        run = subprocess.run(
-            command,
-            cwd=case,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=90,
-        )
-        assert run.returncode == 0, run.stdout[-3000:]
+        source = fixture.read_text().replace("8'h00", "8'h11" if index else "8'h00")
+        case = current_cache().vcs_design('dynamic-'+str(index), {'drivers.sv': source}, 'tw_div_probe')
         outputs.append(case / "simv.daidir/kdb.elab++")
     return outputs
 

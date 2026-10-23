@@ -13,16 +13,10 @@ def test_expression_vectors_with_vcs(tmp_path):
     if os.environ.get('TRACEWEAVE_TEST_EXPRESSION_ORACLE') != '1':
         pytest.skip('opt in with TRACEWEAVE_TEST_EXPRESSION_ORACLE=1')
     assert shutil.which('vcs'), 'VCS required for explicitly requested oracle'
-    source = tmp_path / 'oracle.sv'
-    source.write_text(render())
-    build = subprocess.run(['vcs', '-full64', '-sverilog', '-timescale=1ns/1ps',
-                            str(source), '-top', 'expression_oracle', '-o', 'simv'],
-                           cwd=tmp_path, capture_output=True, text=True, timeout=60)
-    assert build.returncode == 0, build.stdout + build.stderr
-    result = subprocess.run([str(tmp_path / 'simv'), '-no_save'], cwd=tmp_path,
-                            capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stdout + result.stderr
-    check_output(result.stdout)
+    from scripts.test_fixtures import current_cache
+    path = current_cache().vcs_design('expression-vectors', {'oracle.sv': render()},
+                                      'expression_oracle', simulate=True, kdb=False)
+    check_output((path/'simulation.log').read_text())
 
 
 def test_oracle_vectors_have_identified_operator_coverage():
