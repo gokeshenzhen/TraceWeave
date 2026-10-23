@@ -136,15 +136,16 @@ def test_frontier_validation_rejects_foreign_duplicate_and_unbounded_state():
         with pytest.raises(ValueError): validate_state(bad, top='top', root='top', categories={'open_input'})
 
 
-def test_recycling_invalidating_capsules_never_reuses_a_released_handle(monkeypatch):
+@pytest.mark.parametrize('shape', ['balanced', 'wide'])
+def test_recycling_invalidating_capsules_never_reuses_a_released_handle(monkeypatch, shape):
     from tests.test_npi_hierarchy_source import FakeSdk, NativeHandle, TOP
     sdk = FakeSdk()
     sdk.nodes = {TOP: dict(type='npiModule', full_name=TOP, parent=None)}
     sdk.children = {TOP: []}; sdk.parameters = {}
     paths = []
     for i in range(1400):
-        parent = TOP if i < 2 else paths[(i-2)//2]
-        path = parent + '.u' + str(i % 2)
+        parent = TOP if shape == 'wide' or i < 2 else paths[(i-2)//2]
+        path = parent + '.u' + str(i if shape == 'wide' else i % 2)
         paths.append(path)
         sdk.nodes[path] = dict(type='npiModule', full_name=path, parent=parent)
         sdk.children.setdefault(parent, []).append(path)
@@ -174,3 +175,84 @@ def test_recycle_refuses_active_iterator_and_propagates_cleanup_failure():
     p.iterators.clear(); sdk.global_rc = 0
     with pytest.raises(NpiHierarchyUnavailable, match='cleanup_unconfirmed'): p.recycle_scan_handles()
     with pytest.raises(NpiHierarchyUnavailable): p.close()
+
+
+def wide_provider(opts, count, name_size=0):
+    p = Provider([], options=opts)
+    nodes = {p.top: p.root}
+    p.root.data['InternalScope'] = []
+    for i in range(count):
+        path = p.top + '.u' + str(i) + 'x' * name_size
+        h = Handle(type='npiModule', full_name=path, scope_handle=p.root,
+                   Port=[port('a', const('1010'))], InternalScope=[])
+        nodes[path] = h
+        p.root.data['InternalScope'].append(h)
+    p.lookup = nodes.get
+    return p
+
+
+def test_wide_batches_reduce_replay_without_losing_order_facts_or_page_limits(monkeypatch):
+    import src.npi_structural_scan as module
+    opts = options(semantic_max_instances=100000)
+    totals = []
+    for batch in [32, 64]:
+        monkeypatch.setattr(module, '_CHILD_BATCH_SIZE', batch)
+        state, facts, calls = None, [], 0
+        for pages in range(30):
+            p = wide_provider(opts, 1536)
+            result = scan_native_ports(p, opts, state=state)
+            calls += p.budget.call_count
+            assert p.budget.call_count <= 100000 and not p.iterators
+            facts.extend(result['facts'])
+            state = result['_scan_state']
+            if not state['pending']:
+                break
+            assert result['scan_progress']['status'] == 'available'
+        else:
+            pytest.fail('bounded pages failed to drain a finite wide hierarchy')
+        assert result['status'] == 'complete' and result['counts'] == {'constant_connection': 1536}
+        totals.append((calls, pages + 1, facts))
+    assert totals[0][2] == totals[1][2]
+    assert totals[1][0] < totals[0][0] * .75
+    assert totals[1][1] < totals[0][1]
+
+
+def test_child_batch_flushes_early_at_frontier_byte_budget(monkeypatch):
+    import src.npi_structural_scan as module
+    monkeypatch.setattr(module, 'MAX_FRONTIER_BYTES', 128 * 1024)
+    opts = options()
+    p = wide_provider(opts, 128, name_size=400)
+    result = scan_native_ports(p, opts)
+    assert result['status'] == 'complete'
+    assert result['scan_progress']['completed_instances'] == 129
+    assert len(result['facts']) == 128 and not p.iterators
+
+
+def test_deep_wide_subtrees_do_not_exhaust_the_frontier_from_larger_batches():
+    opts = options(semantic_max_instances=100000)
+    state, facts = None, []
+    for _ in range(20):
+        p = Provider([], options=opts)
+        p.root.data['InternalScope'] = []
+        nodes, parent = {p.top: p.root}, p.root
+        for level in range(10):
+            children = []
+            for i in range(200):
+                path = parent.data['full_name'] + '.nested_scope_' + str(i)
+                child = Handle(type='npiGenScope', full_name=path, scope_handle=parent,
+                    Port=[port('a', const('1010'))], InternalScope=[])
+                nodes[path] = child
+                children.append(child)
+            parent.data['InternalScope'] = children
+            parent = children[0]
+        p.lookup = nodes.get
+        result = scan_native_ports(p, opts, state=state)
+        facts.extend(result['facts']);state = result['_scan_state']
+        assert not p.iterators
+        if not state['pending']:
+            break
+        assert result['scan_progress']['status'] == 'available'
+    else:
+        pytest.fail('deep/wide tree failed to drain within bounded pages')
+    assert result['status'] == 'complete' and len(facts) == 2000
+    assert result['scan_progress']['completed_instances'] == 2001

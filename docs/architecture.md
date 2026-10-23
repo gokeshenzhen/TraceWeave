@@ -2905,7 +2905,11 @@ A failed reused backend is discarded so later requests can try again.
 calls at 100,000, ports at 100,000, hierarchy depth at 128, expression depth at 64,
 operands at 256, widths at 4,096, handles at 16,384 per batch, and estimated page
 fact storage at 8 MiB. The scan copies paths/positions and expands siblings in
-batches of 32. After roughly 4,096 acquired handles, it releases all Language
+batches of at most 64, falling back to 32 once queued paths use a quarter of the
+frontier byte budget, and flushing earlier at the byte/frame limits. This
+reduces repeated parent-prefix replay on wide generate hierarchies without
+retaining native objects across safe points or changing the per-call work caps.
+After roughly 4,096 acquired handles, it releases all Language
 handles at a safe point with no active iterator or borrowed scope frame, under
 the same exclusive owner and loaded KDB. Other hierarchy queries retain their
 existing per-query handle cap. Native handle metrics distinguish cumulative

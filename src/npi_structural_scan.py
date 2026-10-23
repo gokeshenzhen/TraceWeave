@@ -29,6 +29,10 @@ _SCOPES = {"npiModule", "npiInterface", "npiProgram", "npiGenScope"}
 # kind and must still be traversed.
 _IGNORE_SCOPES = {"npiTask", "npiFunction", "npiNamedBegin", "npiNamedFork", "npiClassDefn",
                   "npiFor", "npiBegin", "npiFork"}
+# Copy a bounded group of sibling paths before descending. Wide generated
+# hierarchies otherwise reopen and replay the same parent prefix every 32
+# children. Frontier byte/frame limits can flush this batch earlier.
+_CHILD_BATCH_SIZE = 64
 
 
 class _UnsupportedPort(Exception):
@@ -615,6 +619,11 @@ def scan_native_ports(provider, options, *, state=None):
         index = 0
         fingerprint = ''
         child_paths = {c['path'] for c in job['children']}
+        # Keep the larger batch for shallow/wide parents, then fall back to
+        # legacy breadth as queued paths consume the frontier. This preserves
+        # room for descending through deeply nested generated subtrees.
+        child_batch_size = min(_CHILD_BATCH_SIZE,
+                               32 if frontier_bytes >= MAX_FRONTIER_BYTES // 4 else _CHILD_BATCH_SIZE)
         try:
             while True:
                 child = it.read()
@@ -651,7 +660,7 @@ def scan_native_ports(provider, options, *, state=None):
                 job['child_index'] = index
                 fingerprint = next_fingerprint
                 job['child_fingerprint'] = fingerprint
-                if len(job['children']) >= 32:
+                if len(job['children']) >= child_batch_size:
                     # Copy a small sibling batch, then visit it before
                     # reopening this parent's child iterator at its cursor.
                     # No iterator or native object survives that safe point.
