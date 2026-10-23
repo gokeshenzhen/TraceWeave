@@ -152,12 +152,17 @@ class StructuralScanWorkerRequest(_ConnectivityWorkerRequestBase):
     kdb_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     metadata_payload: dict[str, Any]
     options: dict[str, Any]
+    scan_state: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def valid_scan(self):
         from .native_query_codec import decode_native_inputs
         from .npi_structural_lsf import validate_scan_options
         validate_scan_options(self.options)
+        if self.scan_state is not None:
+            from .structural_scan_continuation import validate_state
+            validate_state(self.scan_state, top=self.top, root=self.options['scope'] or self.top,
+                           categories=set(self.options['categories']))
         inputs = decode_native_inputs(self.metadata_payload)
         if inputs.selected_top != self.top or inputs.requested_kdb_path not in (None, self.kdb_path):
             raise ValueError("worker scan top or KDB mismatch")

@@ -50,7 +50,7 @@ def validate_scan_worker_result(request, result):
     allowed = {'status', 'scope', 'artifact_identity', 'capability_version', 'categories_checked',
                'category_results', 'gaps', 'facts', 'total_facts', 'counts', 'instances_visited',
                'analysis_limits', 'coverage_status', 'limitations', 'metrics', 'kdb_binding',
-               'request_fingerprint', 'selected_top', 'gap_summary'}
+               'request_fingerprint', 'selected_top', 'gap_summary', '_scan_state', 'scan_progress'}
     if set(result) != allowed or result['status'] not in {'complete', 'partial'}:
         raise ValueError('invalid scan receipt fields')
     from .schemas import StructuralGapSummary
@@ -81,8 +81,20 @@ def validate_scan_worker_result(request, result):
     if result['status'] == 'complete' and (result['gaps'] or result['analysis_limits'] or
             any(row['status'] != 'complete' for row in result['category_results'].values())):
         raise ValueError('invalid complete scan')
+    from .structural_scan_continuation import validate_state
+    from .schemas import StructuralScanProgress
+    state = validate_state(result['_scan_state'], top=request.top,
+        root=request.options['scope'] or request.top, categories=categories)
+    progress = result['scan_progress']
+    StructuralScanProgress.model_validate(progress)
+    if (progress['completed_instances'] != state['completed_instances']
+            or progress['pending_scopes'] != len(state['pending'])
+            or progress['cumulative_counts'] != state['counts']
+            or (progress['status'] == 'complete') != (not state['pending'])
+            or result['counts'] != state['counts'] or result['total_facts'] != sum(state['counts'].values())):
+        raise ValueError('inconsistent scan progress')
     facts = result['facts']
-    if not isinstance(facts, list) or result['total_facts'] != len(facts) or len(facts) > request.options['limits']['max_facts']:
+    if not isinstance(facts, list) or progress['page_facts'] != len(facts) or len(facts) > request.options['limits']['max_facts']:
         raise ValueError('invalid fact count')
     root = request.options['scope'] or request.top
     for fact in facts:
@@ -106,22 +118,25 @@ def validate_scan_worker_result(request, result):
                 covered.update(range(offset, offset+n))
         elif fact.get('connection_status') != 'explicit_empty' or not fact.get('source'):
             raise ValueError('invalid empty-actual evidence')
-    if result['counts'] != dict(Counter(f['kind'] for f in facts)):
+    counts = Counter((request.scan_state or {}).get('counts', {}))
+    counts.update(f['kind'] for f in facts)
+    if result['counts'] != dict(counts):
         raise ValueError('worker scan counters mismatch')
     metrics = result['metrics']
     allowed_metrics = {'native_port_count', 'native_traversal_ms', 'scope_count', 'native_call_count',
         'symbol_count', 'file_count', 'estimated_fact_bytes', 'query_ms', 'native_handle_count',
         'native_iterator_release_count', 'language_cleanup_ms', 'design_load_ms',
-        'query_with_cleanup_validation_ms', 'native_instance_count'}
+        'query_with_cleanup_validation_ms', 'native_instance_count', 'native_handle_peak', 'native_handle_batches'}
     if (set(metrics) - allowed_metrics or any(type(v) not in {int, float} or not math.isfinite(v) or v < 0 for v in metrics.values())
             or type(result['instances_visited']) is not int or result['instances_visited'] != metrics.get('native_instance_count')):
         raise ValueError('invalid scan work metrics')
     for key, maximum in [('native_instance_count', request.options['limits']['max_instances']),
                          ('native_call_count', 100000), ('native_port_count', 100000),
-                         ('estimated_fact_bytes', 8 * 1024 * 1024), ('native_handle_count', 16385)]:
+                         ('estimated_fact_bytes', 8 * 1024 * 1024), ('native_handle_count', 100000),
+                         ('native_handle_peak', 16385), ('native_handle_batches', 100001)]:
         if type(metrics.get(key)) is not int or not 0 <= metrics[key] <= maximum:
             raise ValueError('worker scan exceeded work budget')
-    if metrics['native_handle_count'] == 16385 and (result['status'] != 'partial' or 'native_handle_limit' not in result['gaps']):
+    if metrics['native_handle_count'] >= 16385 and metrics['native_handle_batches'] <= 1 and (result['status'] != 'partial' or 'native_handle_limit' not in result['gaps']):
         raise ValueError('unreported native handle stop')
     return result
 
@@ -144,7 +159,8 @@ def execute_scan_worker(request, *, backend=None):
             from .verdi_npi_backend import VerdiNpiBackend
             backend = VerdiNpiBackend()
         backend.bind_native_inputs(inputs); backend.bind_kdb_anchor(anchor)
-        result = query_native_scan(backend, request.options, top=request.top, budget=budget)
+        extra = {'state': request.scan_state} if request.scan_state is not None else {}
+        result = query_native_scan(backend, request.options, top=request.top, budget=budget, **extra)
         inputs.require_current(timeout_sec=remaining())
         if not anchor.current(timeout_sec=remaining()):
             raise KdbBindingChanged()
@@ -192,14 +208,14 @@ def execute_scan_worker(request, *, backend=None):
         return WorkerError(error_code='result_invalid', stage='result')
 
 
-def query_scan_over_lsf(backend, inputs, options, budget):
+def query_scan_over_lsf(backend, inputs, options, budget, *, state=None):
     from .npi_lsf import StructuralScanWorkerRequest
     budget.checkpoint()
     options = {**options, 'timeout_sec': min(options['timeout_sec'], budget.deadline-time.monotonic())}
     anchor = backend._bound_kdb_anchor
     request = StructuralScanWorkerRequest(kdb_path=anchor.path, top=inputs.selected_top,
         kdb_identity_sha256=anchor.identity_sha256, kdb_identity_max_bytes=anchor.max_bytes,
-        metadata_payload=encode_native_inputs(inputs), options=options)
+        metadata_payload=encode_native_inputs(inputs), options=options, scan_state=state)
     outcome = backend._execute_bound_request(request, deadline=budget.deadline)
     check_cancelled(); budget.checkpoint()
     execution = dict(execution_mode='lsf', scheduler_status=outcome.scheduler_status, worker_status=outcome.worker_status)

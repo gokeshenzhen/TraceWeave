@@ -555,10 +555,20 @@ class StructuralGapExample(SchemaModel):
 
 class StructuralGapSummary(SchemaModel):
     reason: str = Field(pattern=r'^[a-z][a-z0-9_]*$', max_length=128)
-    occurrences: StrictInt = Field(ge=1, le=100001)
-    affected_ports: StrictInt = Field(ge=0, le=100000)
+    occurrences: StrictInt = Field(ge=1, le=1_000_000_000)
+    affected_ports: StrictInt = Field(ge=0, le=1_000_000_000)
     examples: list[StructuralGapExample] = Field(default_factory=list, max_length=2)
     examples_truncated: bool = False
+
+
+class StructuralScanProgress(SchemaModel):
+    inventory: Literal['cumulative_counts_current_page_facts']
+    completed_instances: StrictInt = Field(ge=0)
+    pending_scopes: StrictInt = Field(ge=0, le=8192)
+    cumulative_counts: dict[str, StrictInt]
+    page_facts: StrictInt = Field(ge=0)
+    status: Literal['available', 'blocked', 'complete']
+    next_scopes: list[str] = Field(default_factory=list, max_length=3)
 
 
 class StructuralResultGroup(SchemaModel):
@@ -578,6 +588,7 @@ class StructuralResultGroup(SchemaModel):
     limitations: list[str] = Field(default_factory=list)
     gap_summary: list[StructuralGapSummary] = Field(default_factory=list, max_length=64)
     gap_summary_truncated: bool = False
+    scan_progress: StructuralScanProgress | None = None
 
     @model_serializer(mode='wrap')
     def omit_empty_gap_summary(self, handler):
@@ -586,10 +597,15 @@ class StructuralResultGroup(SchemaModel):
             row.pop('gap_summary', None)
         if not self.gap_summary_truncated:
             row.pop('gap_summary_truncated', None)
+        if self.scan_progress is None:
+            row.pop('scan_progress', None)
         return row
 
 
 class SemanticScanResult(SchemaModel):
+    continuation: str | None = None
+    suggested_next_action: dict[str, Any] | None = None
+    omitted_result_groups: list[str] | None = None
     termination_reason: str | None = None
     backend: Literal["none", "verdi_npi", "slang", "mixed"] = "none"
     category_coverage: list[StructuralCategoryCoverage] = Field(default_factory=list)
@@ -650,6 +666,7 @@ class StructuralScanSummary(SchemaModel):
     semantic_backend_attempts: list[dict[str, str]] = Field(default_factory=list)
     semantic_native_execution: dict[str, str] = Field(default_factory=dict)
     semantic_termination_reason: str | None = None
+    semantic_continuation: str | None = None
     semantic_fact_count: int
     semantic_scope: str | None = None
     semantic_categories_checked: list[str]

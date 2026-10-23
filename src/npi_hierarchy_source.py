@@ -234,6 +234,9 @@ class NpiHierarchySourceProvider:
         self.active = True
         self.iterators = set()
         self.handle_count = self.iterator_releases = 0
+        self._released_handle_count = 0
+        self.handle_peak = 0
+        self.handle_batches = 1
         self.cleanup_ms = 0.0
         self.cleanup_error = None
         self._top_handle = None
@@ -248,10 +251,33 @@ class NpiHierarchySourceProvider:
     def wrap(self, raw):
         if raw is None:
             return None
-        self.handle_count += 1
-        if self.handle_count > 16384:
-            raise HierarchyBudgetExceeded("native_handle_limit")
+        self._admit_handle()
         return self.util.handle(raw)
+
+    def _admit_handle(self):
+        self.handle_count += 1
+        live = self.handle_count - self._released_handle_count
+        self.handle_peak = max(self.handle_peak, live)
+        if live > 16384:
+            raise HierarchyBudgetExceeded('native_handle_limit')
+
+    def recycle_scan_handles(self):
+        """Scan-only safe point: all scope frames/iterators have been copied."""
+        self.check()
+        if self.iterators or self._file_inventory is not None:
+            raise NpiHierarchyUnavailable('npi_scan_recycle_unsafe')
+        self.budget.call()
+        try:
+            if self.lang.release_all_handles() != 1:
+                raise NpiHierarchyUnavailable('npi_language_cleanup_unconfirmed')
+        except BaseException as exc:
+            self.cleanup_error = exc
+            raise
+        self._top_handle = None
+        self._released_handle_count = self.handle_count
+        self.handle_batches += 1
+        self.require_owner()
+        self.budget.checkpoint()
 
     def scalar(self, handle, name):
         self.check()
@@ -270,9 +296,7 @@ class NpiHierarchySourceProvider:
         value = getattr(handle, name)()
         self.budget.checkpoint()
         if value is not None:
-            self.handle_count += 1
-            if self.handle_count > 16384:
-                raise HierarchyBudgetExceeded("native_handle_limit")
+            self._admit_handle()
         return value
 
     def lookup(self, path):

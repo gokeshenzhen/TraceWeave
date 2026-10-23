@@ -53,3 +53,16 @@ class GapDiagnostics:
     def result(self):
         # Reasons are fixed in the scanner; this is a defensive display bound.
         return copy.deepcopy([self.rows[k] for k in sorted(self.rows)[:self.MAX_REASONS]])
+
+    def merge(self, rows):
+        for incoming in rows:
+            row = self.rows.setdefault(incoming['reason'], dict(reason=incoming['reason'],
+                occurrences=0, affected_ports=0, examples=[], examples_truncated=False))
+            row['occurrences'] += incoming['occurrences']
+            row['affected_ports'] += incoming['affected_ports']
+            row['examples_truncated'] |= incoming['examples_truncated']
+            for example in incoming['examples']:
+                if len(row['examples']) < self.PER_REASON and self.example_count < self.MAX_EXAMPLES:
+                    row['examples'].append(copy.deepcopy(example)); self.example_count += 1
+                else:
+                    row['examples_truncated'] = True

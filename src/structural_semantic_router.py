@@ -6,7 +6,6 @@ This module performs no discovery, licensed work, source capture or cache access
 """
 from __future__ import annotations
 
-from collections import Counter
 import copy
 
 NPI_PORT_CATEGORIES = frozenset({"constant_connection", "open_input"})
@@ -48,6 +47,7 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
             "selected_categories": [], "total_facts": raw.get("total_facts", 0),
             "gaps": raw.get("gaps", []), "limitations": raw.get("limitations", []),
             "gap_summary": copy.deepcopy(raw.get("gap_summary", [])),
+            "scan_progress": copy.deepcopy(raw.get("scan_progress")),
         })
     for category in categories:
         nr, sr = category_result(native, category), category_result(source, category)
@@ -72,7 +72,10 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
         coverage.append({
             "category": category, "status": receipt["status"], "backend": backend,
             "result_group": backend if raw is not None else None,
-            "scope": scope, "checked_scope": (raw or {}).get("checked_scope", scope), "total_facts": len(rows), "gaps": list(receipt.get("gaps", [])),
+            "scope": scope, "checked_scope": (raw or {}).get("checked_scope", scope),
+            "total_facts": ((raw or {}).get('counts', {}).get(category, len(rows))
+                            if backend == 'verdi_npi' and (raw or {}).get('scan_progress') else len(rows)),
+            "gaps": list(receipt.get("gaps", [])),
             "evidence_domain": "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics",
         })
     for group in groups:
@@ -90,7 +93,8 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
     for key in ("category_results", "artifact_identity", "limitations", "selected_top", "checked_scope", "kdb_binding"):
         result.pop(key, None)
     result.update(status=status, scope=scope, backend=(next(iter(backends)) if len(backends) == 1 else "mixed" if backends else "none"),
-                  facts=facts, total_facts=len(facts), counts=dict(Counter(f["kind"] for f in facts)),
+                  facts=facts, total_facts=sum(c['total_facts'] for c in coverage),
+                  counts={c['category']: c['total_facts'] for c in coverage if c['total_facts']},
                   categories_checked=checked, category_coverage=coverage, result_groups=groups,
                   instances_visited=sum(r.get("instances_visited", 0) for r in (native, source) if r),
                   backend_attempts=list(attempts),
@@ -104,5 +108,9 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
     if len(facts) > display_limit:
         result["facts"] = facts[:display_limit]
         result["output_truncated"] = True
+    if result['total_facts'] > len(result['facts']):
+        result['output_truncated'] = True
     result["note"] = "Structural evidence, not confirmed defects. Read each category's domain, identity and gaps; KDB/source association is unverified."
+    if (native or {}).get('scan_progress'):
+        result['note'] += ' Native counts are cumulative; native fact rows belong to this page only.'
     return result

@@ -237,6 +237,11 @@ explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
 
 查看 `semantic.category_coverage` 和 `result_groups`，区分 NPI 端口事实与源码事实的范围和身份。默认的比较检查仍需源码证据；未知表达式、空实际连接的默认值语义、预算截断均保留缺口。零事实和缓存命中不证明完整，发现项也可能是正常 tie-off。详见[扫描模式与限制](docs/architecture.md#structural-scan-invocation)。
 
+大设计可按 `semantic.suggested_next_action` 续扫，或把返回的
+`semantic.continuation` 作为 `semantic_continuation`，保持日志、顶层、范围和类别一致。
+计数累计，事实列表仅包含本页；token 闲置十分钟过期，服务重启或身份变化后失效。
+已有明确目标时，直接指定其精确 `semantic_scope` 做局部检查。
+
 **能分析 formal 波形吗？**
 
 可以复用现有读取工具查询导出波形，并自动发现 JasperGold 产物。Property 结果和可达性语义仍需由 formal 工具或验证上下文提供。

@@ -60,7 +60,16 @@ class Provider:
     def check(self): self.budget.checkpoint()
     def _require_top(self): self.check()
     def _under_top(self, h): return True
-    def lookup(self, path): return {'top': self.root, 'top.u': self.child}.get(path)
+    def lookup(self, path):
+        pending, seen = [self.root], set()
+        while pending:
+            h = pending.pop()
+            if id(h) in seen:
+                continue
+            seen.add(id(h))
+            if h.data.get('full_name') == path:
+                return h
+            pending.extend(h.data.get('InternalScope', []))
     def scalar(self, h, name): self.budget.call(); return h.data.get(name)
     def one(self, h, name): self.budget.call(); return h.data.get(name)
     def wrap(self, raw): return raw

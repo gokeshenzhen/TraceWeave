@@ -245,6 +245,12 @@ No. Supply a compile/elaboration log. Text checks use accessible sources; `auto`
 
 Read `semantic.category_coverage` and `result_groups`: NPI port facts and source facts retain separate domains and identities. Default comparison checks still need source evidence; unknown expressions, empty-actual default semantics and budget stops remain gaps. Zero facts or a cache hit does not prove completeness. Findings can include legitimate tie-offs. See [scan modes and limits](docs/architecture.md#structural-scan-invocation).
 
+For large designs, follow `semantic.suggested_next_action` or pass the returned
+`semantic.continuation` as `semantic_continuation` with the same log/top/scope/categories.
+Counts are cumulative; fact rows belong to the current page. Tokens expire after
+ten idle minutes and survive neither server restart nor identity changes. For a
+known target, query its exact `semantic_scope` directly.
+
 **Can it inspect formal waveforms?**
 
 Yes, exported waveforms use the same readers, with automatic JasperGold artifact discovery. Property results and reachability semantics still come from your formal tool or verification context.

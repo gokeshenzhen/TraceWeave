@@ -35,6 +35,7 @@ ROUTE_FIELDS = frozenset({"compile_log", "supplementary_compile_logs", "simulato
 NATIVE_IDENTITY_ERRORS = frozenset({
     "npi_loaded_generation_changed", "npi_scope_changed_during_query",
     "npi_compile_context_mismatch", "npi_scope_parent_mismatch",
+    "npi_scan_position_changed",
     "npi_namespace_parent_mismatch", "npi_class_identity_conflict",
     "npi_lsf_result_invalid", "npi_lsf_protocol_mismatch", "npi_lsf_protocol_invalid",
 })

@@ -28,12 +28,12 @@ def request(tmp_path):
     return req, inputs, anchor, source
 
 
-def worker(req, monkeypatch):
+def worker(req, monkeypatch, ports=None):
     backend = NS(kdb_load_quality='clean', bind_native_inputs=lambda i: None, bind_kdb_anchor=lambda a: None)
-    def query(backend, options, *, top, budget):
-        p = Provider([port('a', const('1010'))], options=options); p.budget = budget
+    def query(backend, options, *, top, budget, state=None):
+        p = Provider(ports or [port('a', const('1010'))], options=options); p.budget = budget
         p.artifact_identity = hashlib.sha256((req.kdb_identity_sha256 + '\0' + req.top).encode()).hexdigest()
-        result = scan_native_ports(p, options)
+        result = scan_native_ports(p, options, state=state)
         result.pop('query_metrics')
         result['metrics'].update(native_call_count=budget.call_count, native_instance_count=budget.scope_count,
                                  native_handle_count=1, estimated_fact_bytes=budget.fact_bytes)
@@ -128,3 +128,22 @@ def test_worker_rejects_unbounded_or_unrelated_diagnostics(tmp_path, monkeypatch
     raw['gaps'] = [row['reason']]; raw['status'] = 'partial'
     row['examples'] *= 3
     with pytest.raises(ValueError): scan.validate_scan_worker_result(req, raw)
+
+
+def test_worker_continuation_validates_page_delta_and_frontier(tmp_path, monkeypatch):
+    req, _, _, _ = request(tmp_path)
+    payload = req.model_dump()
+    payload['options']['scope'] = 'top.u'
+    payload['options']['limits']['max_facts'] = 1
+    req = npi_lsf.parse_worker_request_bytes(json.dumps(payload).encode())
+    ports = [port('a', const('1010')), port('b', const('0101'))]
+    first = worker(req, monkeypatch, ports)
+    assert first.status == 'ok' and first.result['scan_progress']['status'] == 'available'
+    payload = req.model_dump(); payload['scan_state'] = first.result['_scan_state']
+    req2 = npi_lsf.parse_worker_request_bytes(json.dumps(payload).encode())
+    final = worker(req2, monkeypatch, ports)
+    assert final.status == 'ok' and final.result['total_facts'] == 2 and len(final.result['facts']) == 1
+    raw = deepcopy(final.result); raw['facts'][0]['kind'] = 'open_input'
+    with pytest.raises(ValueError): scan.validate_scan_worker_result(req2, raw)
+    payload['scan_state']['pending'][0]['path'] = 'foreign'
+    with pytest.raises(ValueError): npi_lsf.parse_worker_request_bytes(json.dumps(payload).encode())

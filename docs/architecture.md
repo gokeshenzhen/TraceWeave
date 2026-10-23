@@ -2814,7 +2814,7 @@ a contextual-conversion gap. Variable indexes, out-of-range selections and
 unresolved or unsupported multidimensional types remain gaps. Procedural
 `For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
 `GenScope` instances are still visited. The native capability receipt is
-`npi_input_ports_v4`. Four-state transfer functions model bitwise operations,
+`npi_input_ports_v5`. Four-state transfer functions model bitwise operations,
 logical not/and/or, reductions, conditional merging and bounded replication.
 They preserve proven constant regions even with dynamic operands; internal
 dynamic unknowns are distinct from constant RTL X/Z. Common operand signedness
@@ -2856,9 +2856,13 @@ Every returned fact has a unique `backend` and `result_group`. Combined results
 report `backend="mixed"`; they never claim one shared native/source artifact.
 Cache hits and zero facts do not establish completion. Lexical risk counts and
 semantic fact counts stay separate, including in diagnostic/recommendation summaries.
-Display trimming preserves counts, group identities and category coverage and marks
+Display trimming preserves counts, observed group identities and category coverage and marks
 `output_truncated`; work stops remain partial. The combined displayed list is also
 capped by `semantic_max_facts`, independently of each backend's extraction bound.
+At the terminal display budget, optional limitations prose and an unreferenced,
+unobserved `not_run` group can be omitted; `omitted_result_groups` identifies the
+latter and backend-attempt reasons remain. Referenced/native artifact receipts
+are retained.
 
 ### Native scan lifecycle and limits
 
@@ -2876,18 +2880,63 @@ The SDK cannot be interrupted inside a synchronous call; checkpoints reject late
 completion and cleanup still runs. A blocked local call can delay other event-loop
 work. Iterators are released and Language handles cleared on every owner exit.
 At most one successfully validated local backend is retained for loaded-design
-reuse; no native handles or new native scan-result/disk cache are retained.
+reuse; no native handles or full native scan-result/disk cache are retained.
 A failed reused backend is discarded so later requests can try again.
 
 `semantic_max_instances` bounds native visited scopes (including generate scopes);
-`semantic_max_facts` bounds each extraction. Native work additionally caps explicit
+`semantic_max_facts` bounds each native page (and each source extraction). Native work additionally caps explicit
 calls at 100,000, ports at 100,000, hierarchy depth at 128, expression depth at 64,
-operands at 256, widths at 4,096, handles at 16,384, and estimated fact storage at
-8 MiB. The existing owner can observe one final handle while detecting its cap;
-that attempted count is retained with `native_handle_limit`. Work metrics identify
+operands at 256, widths at 4,096, handles at 16,384 per batch, and estimated page
+fact storage at 8 MiB. The scan copies paths/positions and expands siblings in
+batches of 32. After roughly 4,096 acquired handles, it releases all Language
+handles at a safe point with no active iterator or borrowed scope frame, under
+the same exclusive owner and loaded KDB. Other hierarchy queries retain their
+existing per-query handle cap. Native handle metrics distinguish cumulative
+acquisitions, peak per batch and batch count. One final handle may be observed
+while detecting a batch cap; a bounded retry requires actual release/progress.
+Expression depth/operand stops are port gaps and do not block unrelated ports.
+Work metrics identify
 native calls/ports/scopes separately from Slang AST visits. `semantic_max_rss_mib`
 bounds the isolated Slang worker, not local NPI; process RSS can grow with a loaded KDB.
 No hard native RSS isolation is claimed.
+
+### Continuing a bounded native scan
+
+A work-limited scan that made progress returns `semantic.continuation` and a
+ready-to-use `suggested_next_action`. Repeat `scan_structural_risks` with
+`semantic_continuation` and the same compile log, selected top, semantic scope
+and categories. Per-call work budgets may change. Repeating the original call
+without the token starts a new inventory; the server does not silently select a
+module from a test name. For a known target, pass its exact `semantic_scope`
+directly, independently of unfinished global coverage.
+
+Tokens are process-local, expire after ten idle minutes and are consumed only
+after a successfully validated response. Restart, expired/consumed tokens or
+changed metadata/KDB/policy/domain terminate continuation without source fallback.
+Cancellation preserves the old token for an explicit retry. The event-loop-owned
+store caps 16 entries / 16 MiB, with at most 1 MiB / 8,192 pending frames per
+inventory. It retains only copied paths, port/child positions and prefix
+fingerprints, cumulative counts
+and bounded gap diagnostics, never native objects or source bodies. No-progress
+or irreducible stops report `scan_progress.status="blocked"` without a token.
+
+Reopening an iterator rechecks its skipped prefix fingerprint; reordered,
+shortened or changed prefixes terminate the query instead of silently skipping
+bindings. Native `result_groups[].scan_progress` distinguishes page work from the continued
+inventory. `total_facts`, category counts and diagnostics are cumulative; native
+`facts` contain only this page's rows. Earlier rows are not repeated or retained
+as a full result cache, so keep earlier responses or query a narrower scope.
+`output_truncated` remains true when the current response omits prior-page facts.
+Visited-scope/call/port/byte metrics are per call; `completed_instances` and
+`pending_scopes` describe the inventory frontier. Draining that frontier removes
+transient work-limit gaps but preserves semantic gaps; `scan_progress.status`
+does not replace per-category coverage. All categories must actually be covered
+before a complete semantic result is possible.
+
+Each continuation has a fresh bounded semantic deadline; no automatic unbounded
+background sweep occurs. LSF workers accept the same validated copied frontier,
+execute only native work, and return page deltas checked against cumulative counts.
+Licensed loading remains remote in LSF mode; separate jobs may reload the KDB.
 
 LSF uses the distinct version-5 `structural_scan` worker operation over the existing
 private transport. Requests carry metadata, exact KDB/top/scope/categories and

@@ -6882,6 +6882,8 @@ async def list_tools():
                     "analysis_mode": {"type": "string", "enum": ["fast", "auto", "deep"], "default": "auto"},
                     "semantic_categories": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": list(SEMANTIC_CATEGORIES)}, "description": "Defaults to constant_connection, open_input, constant_comparison. Request propagated_constant and/or constant_control explicitly for bounded cross-hierarchy analysis."},
                     "semantic_scope": {"type": "string", "description": "Exact elaborated instance path and its descendants; omitted scans all elaborated tops."},
+                    "semantic_continuation": {"type": "string", "minLength": 32, "maxLength": 32,
+                        "description": "Process-local token from semantic.continuation. Resume the same native inventory with unchanged compile log, top, scope and categories. Work budgets may change. Tokens expire after 10 minutes and are consumed on success."},
                     "semantic_timeout_sec": {"type": "number", "exclusiveMinimum": 0, "maximum": 120, "default": 15},
                     "semantic_max_rss_mib": {"type": "integer", "minimum": 64, "maximum": 4096, "default": 512},
                     "semantic_max_instances": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 25000},
@@ -9698,6 +9700,10 @@ async def _dispatch_inner(name: str, args: dict):
 
     elif name == "scan_structural_risks":
         analysis_mode, semantic_options = validate_semantic_options(args)
+        continuation = args.get('semantic_continuation')
+        if continuation is not None and (analysis_mode == 'fast' or not isinstance(continuation, str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{32}', continuation)):
+            raise ValueError('semantic_continuation requires auto/deep and a current 32-character token')
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
         top_hint = args.get("top_hint")
@@ -9861,6 +9867,7 @@ async def _dispatch_inner(name: str, args: dict):
             mode=analysis_mode, options=semantic_options, compile_log=args["compile_log"], simulator=simulator,
             source_scan=source_scan, run_thread=_run_in_cancellable_thread,
             top_hint=args.get("top_hint"), metadata_guard=metadata_guard,
+            continuation=continuation,
         )
         if analysis_mode != "fast" and result["semantic"]["status"] != "complete":
             result.setdefault("coverage_warnings", []).append(
@@ -10602,6 +10609,7 @@ def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) 
         "semantic_backend_attempts": result.semantic.backend_attempts,
         "semantic_native_execution": result.semantic.native_execution,
         "semantic_termination_reason": result.semantic.termination_reason,
+        "semantic_continuation": result.semantic.continuation,
         "semantic_fact_count": result.semantic.total_facts,
         "semantic_scope": result.semantic.scope,
         "semantic_categories_checked": result.semantic.categories_checked,
@@ -11776,7 +11784,11 @@ def _trim_semantic_scan(model: schemas.SemanticScanResult, limit: int) -> dict:
     )
     payload["facts"] = facts
     payload["instance_bindings"] = bindings
+    if limit <= 3:
+        payload.pop('suggested_next_action', None)
     for group in payload['result_groups']:
+        if limit <= 3 and group.get('scan_progress'):
+            group['scan_progress']['next_scopes'] = []
         if limit <= 3:
             for row in group.get('gap_summary', []):
                 row['examples_truncated'] |= bool(row['examples'])
@@ -11784,6 +11796,18 @@ def _trim_semantic_scan(model: schemas.SemanticScanResult, limit: int) -> dict:
         if limit == 0 and group.get('gap_summary'):
             group['gap_summary'] = []
             group['gap_summary_truncated'] = True
+        if limit == 0:
+            group.pop('scan_progress', None)
+            group['limitations'] = []
+    if limit == 0:
+        referenced = {row['result_group'] for row in payload['category_coverage']}
+        omitted = [g['group_id'] for g in payload['result_groups'] if
+            g['group_id'] not in referenced and g['status'] == 'not_run'
+            and g.get('artifact_identity') is None and not g['total_facts']
+            and not g['selected_categories']]
+        if omitted:
+            payload['omitted_result_groups'] = omitted
+            payload['result_groups'] = [g for g in payload['result_groups'] if g['group_id'] not in omitted]
     return payload
 
 
@@ -11835,7 +11859,9 @@ def _shrink_scan_structural_risks_terminal(
         {
             **model.model_dump(exclude_none=True),
             "detail_level": "summary",
-            "detail_hint": "Response truncated to fit budget. Re-run scan_structural_risks with one category.",
+            "detail_hint": ("Resume with semantic_continuation and unchanged scope/categories."
+                            if model.semantic.continuation else
+                            "Response truncated to fit budget. Re-run scan_structural_risks with one category."),
             # Keep coverage/identity/counters, shed explanatory prose and
             # optional timings before ever dropping required semantic receipts.
             "semantic": {**_trim_semantic_scan(model.semantic, 0), "note": None, "metrics": {}},
