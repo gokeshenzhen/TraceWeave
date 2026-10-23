@@ -50,6 +50,8 @@ def main(argv=None):
                        '--tw-report', str(output / 'pytest.json'), '--junitxml', str(output / 'junit.xml')]
             if args.list:
                 command += ['--collect-only', '-q']
+            if args.cache_dir:
+                command += ['--tw-cache-dir', str(args.cache_dir.resolve())]
             extra = args.pytest_args
             if extra[:1] == ['--']:
                 extra = extra[1:]

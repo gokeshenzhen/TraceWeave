@@ -15,6 +15,7 @@ def pytest_addoption(parser):
     group.addoption('--tw-profile', choices=tuple(PROFILES), default='portable')
     group.addoption('--tw-report', type=str)
     group.addoption('--tw-plan-only', action='store_true')
+    group.addoption('--tw-cache-dir', type=str)
 
 
 def pytest_configure(config):
@@ -60,6 +61,19 @@ _active = None
 def pytest_sessionstart(session):
     global _active
     _active = session.config
+
+
+def pytest_collection_finish(session):
+    config = session.config
+    if config.option.collectonly or config.getoption('--tw-plan-only'):
+        return
+    from scripts.test_fixtures import prepare_for_tests
+    try:
+        config._tw_report['fixtures'] = prepare_for_tests(
+            config._tw_report['selected'], config.getoption('--tw-cache-dir'))
+    except Exception as exc:
+        config._tw_report['preparation_error'] = str(exc)
+        raise pytest.UsageError('fixture preparation failed: ' + str(exc)) from exc
 
 
 def pytest_runtest_logreport(report):
