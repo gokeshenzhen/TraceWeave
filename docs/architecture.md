@@ -120,21 +120,7 @@ Verification
   wide token can exceed that size. Iterator dispatch avoids retaining a whole-file
   token list; no signal, scope or time-window filtering is applied during loading.
   Cancellation checkpoints between chunks discard partial parser state so a later
-  request can retry without duplicate records. Reproduce reader timings
-  with `scripts/benchmark_waveform_reads.py`: generate a deterministic VCD using
-  `--generate --wave /tmp/activity.vcd --steps 1000000`, then run the same command
-  without `--generate` (optionally `--workload point`, `window`, `around`, or
-  `cycle`). `--source-root` selects another checkout for before/after comparison.
-  The script checks returned values and reports first-load versus repeated-read
-  timing and Linux RSS; it excludes MCP transport, conversion and disk-cold I/O.
-  `scripts/benchmark_vcd_replay.py --wave <original.vcd> --calls <calls.json>
-  --output <new-directory>` replays a retained list of `{tool, arguments}` calls
-  through the public handler. It measures the complete first sequence and repeated
-  sequences, CPU, RSS and existing sweep phases. Hashing primes the OS file cache;
-  a cold run means a new parser. Optional `--debug-dir` runs the discovery/log
-  prerequisites, `--fingerprint` checks all retained transitions outside timing,
-  and `--profile-parse` records statement-boundary diagnostic probes separately
-  from the uninstrumented performance comparison.
+  request can retry without duplicate records.
 - FSDB point output retains the shared 64 MiB capacity for wide values, but
   copies only the actual value plus its NUL terminator. Unused capacity is not
   zero-filled on each read; the allocation and native signal-loading costs are
@@ -161,11 +147,7 @@ Verification
   group members and reject nonmembers without disturbing the group. Range and
   around-time reads keep their existing predecessor/history behavior. Native
   calls still run under the global FSDB lock and cancellation is observed after
-  the native call returns. For a reproducible multi-session fixture, generate
-  the benchmark VCD, convert using local Verdi `vcd2fsdb` with
-  `FSDB_ENV_WRITER_MEM_LIMIT=4`, and point `TW_POINT_READ_FSDB` at the result when
-  running `tests/test_fsdb_point_window.py`. `--wrapper` on the benchmark selects
-  a separately compiled baseline library for A/B measurement.
+  the native call returns.
 - `server.py` is both the composition root and the workflow gate; tool ordering,
   prerequisite enforcement, session-compatible cache reuse, and in-process
   parsed-log snapshots for same-path simulation reruns live there. Simulation
@@ -276,16 +258,8 @@ Verification
   never bypasses fresh adapter content validation. A verified hit constructs
   an independent query engine; corruption is a safe miss and failed/cancelled
   builds are never published.
-  `scripts/soak_source_graph_semantic_session.py` exercises this lifecycle with
-  20--100 external exact deep queries in fresh one-shot and persistent child
-  processes. It admits default-on evidence only when every query selects one
-  semantic context, facts/status/coverage remain equal, one frontend launch
-  serves the sequence without restart/eviction/failure, latency gates pass,
-  and RSS remains bounded. Its report contains only hashes, fixed labels, and
-  numeric aggregates. Existing adjacent-artifact reuse is classified as
-  `not_needed_existing_artifact_scope`, not as a session hit. Even a passing
-  per-design implementation gate cannot authorize default-on without
-  representative eligible-design and operational query-frequency evidence.
+  Adjacent-artifact reuse is classified as
+  `not_needed_existing_artifact_scope`, separately from a semantic-session hit.
   In-memory dominance is proved across dependency-closure identities when the
   immutable full design identity is exact, the available ordered projection
   inputs contain the requested projection, and the available explicit
@@ -351,14 +325,7 @@ Verification
   probes the instance dictionary, making lookup proportional to path depth
   rather than projected instance count. Ordered wide-bit mappings remain
   tuples for exact ascending-range/concat semantics, but per-match membership
-  indexes are built once instead of once per candidate bit. Neither optimization
-  changes the IR or public result schema. A 100,000-instance synthetic lookup
-  remained 0.0037 ms median; 4,096/16,384/65,536-bit load queries were
-  4.1/16.7/75.6 ms median, while the 65,536-bit public JSON alone was 3.44 MB.
-  The measured cost is linear in an extreme-width result rather than a
-  hierarchy or stable-ID lookup hotspot. Interval/segment storage therefore
-  remains a future migration gated on a representative workload whose IR
-  memory or warm latency is dominated by bit tuples.
+  indexes are built once per match without changing IR or public result schemas.
   The two default compile-source consumers use a separate process-session
   `CompileSourceIndexRuntime`. An exact compile-log snapshot, simulator,
   ordered source list, and resource policy identify one active session.
@@ -685,8 +652,6 @@ Verification
   budget, capped at50000 visits, for buffer/declaration/namespace work, leaving
   provider/rendering budget. Its scope/byte/deadline caps and exact identity
   checks remain; ordinary connectivity/trace/packed4096 ceilings are unchanged.
-  This functional envelope supports the2432-input representative before local
-  UART declaration observation; it makes no performance claim.
   `hierarchy_source_export` composes the seven internal section exports.
   Compile-record exports never touch a provider and charge their copied payload
   against the byte budget. `record_export_complete` describes a successful
@@ -718,7 +683,7 @@ Verification
   file ownership, count proofs and export completeness. This avoids a recursive
   model depth cap below the service's 256-level limit. Validation checks shape
   and consistency, not the truth of an NPI/Slang fact. The source worker and
-  public routes use this boundary, covered by independent control regressions.
+  public routes use this boundary.
   `design_context_codec` supplies a bounded private metadata transport for
   prepared workers. It preserves ordinary and explicit-recovery identities,
   snapshots and path observations without source bodies or native handles.
@@ -796,8 +761,7 @@ Verification
   waveform identity and parser-generation checks precede cursor publication,
   including when the waveforms match. Typed failures return an error without
   cursor/actions; legacy compile tokens remain intact for exact recovery.
-  Neither optional Slang cache default changes. Preparation, registration validation and later
-  query costs must be measured together before claiming a speedup.
+  Both optional Slang cache tiers remain default-off.
   `src/kdb_anchor.py` separately captures a bounded on-disk KDB generation:
   two observations of five fixed elaboration maps, including raw hashes and
   aliases, must agree. It distinguishes missing, empty, source-only and
@@ -920,8 +884,8 @@ Verification
   the handle/snapshot identity covers every log while one-log callers retain
   their old identity. Mixed-language manifests retain VHDL files in that
   identity but send only Verilog/SystemVerilog inputs to Slang. Compile-log
-  parsing, manifest translation, bounded projection, workers, KDB input
-  extraction, and benchmark oracles share `hdl_suffixes.py`: `.v`, `.vh`,
+  parsing, manifest translation, bounded projection, workers and KDB input
+  extraction share `hdl_suffixes.py`: `.v`, `.vh`,
   `.sv`, `.svh`, `.svi`, `.sva`, and `.svl` are text-capable frontend inputs;
   `.svp` remains an ordered, content-fingerprinted frontend/KDB input but is
   never fed to lexical hierarchy or structural-risk scans. Its suffix alone
@@ -977,29 +941,12 @@ Verification
   candidates until valid-hold semantics are supplied explicitly. Idle-ready counts
   remain visible for both families but create no sweep flag or ranking weight.
   Explicit `inspect_handshake` calls retain their previous semantics. Packed-only
-  buses require a future field-selection capability; empty discovery cannot
-  certify them. Each inspected row retains its actual check coverage.
+  buses are outside scalar discovery coverage; empty discovery cannot certify
+  them. Each inspected row retains its actual check coverage.
   Paging and sampling run under the existing wave locks, including the one global
   FSDB lock. Cancellation is checked between pages and after native calls; native
   open and individual native calls are still not interruptible internally. Time
   conversion, four-state values, predecessor and transition truncation are unchanged.
-  Reproduce discovery or sweep workloads with
-  `python3.11 scripts/benchmark_signal_discovery.py --wave /absolute/run.fsdb
-  --mode discovery --scope tb.dut --output /tmp/discovery.json` (omit scope for
-  global discovery; use `--mode sweep --start 0 --end 100000 --max-interfaces 64`
-  for a sweep). Run each revision serially in fresh processes. Reports include
-  first/warm wall and CPU time, peak RSS, native/search call volume, complete
-  facts and source/library/input fingerprints. Candidate sets can change with
-  role corrections: compare common-interface observations separately from new
-  candidates and changed flags, rather than claiming identical whole results.
-  The September 18 large SoC replay (18,641 lexical hierarchy nodes, 75,578
-  VCD IDs, fresh MCP server, NPI disabled, 64-interface cap) discovered at least
-  7,421 interfaces versus 297 in the original evaluation. It explicitly reported
-  partial discovery at the signal cap. The previously missed deep stage yielded
-  two interfaces in 94 ms; both had zero payload-hold violations. The whole
-  first sweep took 4.21 s, including VCD loading, versus the earlier 7.16 s;
-  process-tree peak RSS was 791 MiB versus about 711 MiB. These are individual
-  case measurements, not full-coverage or general speed/memory guarantees.
 - A full `sweep_handshakes` does not independently reread and re-extract the
   same clock for every interface. `handshake_sweep` groups discovered bundles
   by clock. The compatibility path creates one private `EdgeSamplingSession`
@@ -1020,15 +967,6 @@ Verification
   keep an active FSDB transition group resident (a nested point query would
   otherwise load/unload native signals mid-group). Around-time history is also
   separated from the strict window and normalized to chronological order.
-  `scripts/benchmark_sweep_shared_clock.py` is the reproducible structural
-  benchmark for this path. On a warmed generated VCD with 32 independent
-  valid/ready interfaces, one shared clock, 20,000 cycles, and three repeats,
-  the same workload measured 28,492.5 ms median before grouping and 13,986.8 ms
-  after (50.9% lower). Clock reads/edge extractions fell from 32 to 1; maximum
-  incremental `tracemalloc` peak changed from 32.45 to 33.13 MiB (+0.68 MiB,
-  +2.1%). This validates the repeated-clock optimization, not a 5-minute promise
-  for a proprietary FSDB whose native signal reads may have a different cost
-  profile.
 - Full sweeps use a private column-oriented sampler: one edge-time vector and
   one value-reference column per signal. They do not materialize `time_ns`, a
   per-edge `signals` dictionary, or a normalized `{bin,hex,dec}` copy for every
@@ -1038,12 +976,7 @@ Verification
   same pass as the main handshake state machine. Signal lookup uses a monotonic
   transition cursor (with a bisect fallback only for unexpected decreasing
   sample times), preserving duplicate-timestamp and pre-first-transition
-  behavior. On the same generated 32-interface/one-clock/20,000-cycle VCD
-  benchmark above, three runs measured 11,473.8 ms median and 19.80 MiB maximum
-  incremental `tracemalloc` peak: 18.0% lower elapsed time and 40.2% lower peak
-  than the previous 13,986.8 ms / 33.13 MiB grouped implementation. A separate
-  1,000,000-sample/50,000-transition lookup benchmark measured 3.3x speedup
-  over the former per-sample bisect oracle with equal values.
+  behavior.
 - For FSDB clock groups, `FSDBParser.transition_group()` uses an optional native
   ABI to add the group's resolved signals once, call `ffrLoadSignals()` once,
   read each signal independently through the existing reusable 64 MiB per-call
@@ -1105,19 +1038,10 @@ Verification
   equal timestamps and uncertain ordering retain the generic group fold;
   cancellation checkpoints and truncation checks are preserved. Cached peek
   results avoid repeated lookups without changing page or work budgets.
-  `tests/test_p2b_handshake_streaming.py` covers cross-block protocol state,
-  limits, cleanup and native compatibility; `tests/test_p2b_refinements.py`
-  compares cursor values, group flags and cancellation points with the generic
-  cursor and checks accounting, row publication and consumer isolation.
   `TRACEWEAVE_FSDB_GROUP_MAX_SIGNALS` can set 1..256 after RSS review. Oversized
   groups, begin failures, and older wrappers automatically use the legacy
   per-signal path. Cancellation between interfaces unwinds the context before
-  releasing the process-global FSDB lock. On the bundled warmed wide-bus FSDB
-  fixture (7 signals, 50 load/read/unload iterations per repeat, 7 alternating
-  repeats), the grouped median was 23.644 ms versus 25.773 ms legacy (8.3%
-  lower), with identical transition counts and truncation receipts. This
-  validates the mechanism only; the one-run metrics are required to judge a
-  proprietary workload.
+  releasing the process-global FSDB lock.
 - Capped public FSDB transition queries retain only the requested detail
   prefix while counting the rest through the event-count ABI. A parser-local
   exact-count LRU holds at most 1,024 signal/window keys or 256 KiB of accounted
@@ -1154,14 +1078,6 @@ Verification
   decompression and cleanup, but FFR session sizes and demand-loading remain
   outside the progress budget's control; two spans are not a resident-byte
   guarantee. No native handle is retained by the count caches.
-- `scripts/benchmark_sweep_fsdb_group.py` compares complete sweep results while
-  alternating forced-legacy and grouped runs, and emits aggregates only. On a
-  local 34,874-byte AHB repro FSDB (634 signals, four discovered interfaces,
-  5 repeats), both paths returned byte-equivalent fact tables with complete
-  coverage and no transition truncation. The packed/grouped median was
-  47.807 ms versus 50.523 ms forced-legacy (5.4% lower); four clock units fit
-  into three native packs (maximum 16 resident signals) with no fallback. This
-  is a protocol/compatibility sample, not evidence about multi-GB scaling.
 - `src/path_discovery.py`, `src/compile_log_parser.py`, `src/log_parser.py`, and
   `src/analyzer.py` form the main failure-analysis path from artifacts to
   normalized failures and recommended next steps.
@@ -1176,8 +1092,7 @@ Verification
   unchanged line-local matcher; and a compact file-local newline index serves
   all source anchors without repeated prefix scans. The scan is offloaded from
   the event loop and checks cooperative cancellation between files and within
-  its long Python loops. `scripts/benchmark_structural_scan.py` reports
-  privacy-safe timing/RSS/I/O aggregates and a full-result equivalence hash.
+  its long Python loops.
 - `design_identity.py` and `structural_scan_runtime.py` cache the complete
   lexical scan before MCP output trimming. Ordered compile context, exact raw
   content, categories and rule version form the key; digest records are reused
@@ -1202,16 +1117,7 @@ Verification
   `TRACEWEAVE_STRUCTURAL_SCAN_CACHE=0` to bypass this optimization.
   An already joined source lease survives identity capture and transfers into
   the rule build on a miss, even if hierarchy finishes first. Cache hits and
-  coalesced callers release unused leases. The source-index A/B benchmark
-  disables result caching and uses `fast` so it measures source sharing;
-  result-cache byte validation is measured by the separate cache benchmark.
-  `scripts/benchmark_structural_cache.py` compares full internal result hashes.
-  On the local OpenTitan 1,117-source workload (September 18, sequential calls
-  in one fresh process), uncached/cold calls took 4.26/5.99 s; three warm hits
-  took 1.03/1.06/1.01 s with zero rule executions and identical full results.
-  The stored result occupied 739,443 bytes; cumulative process peak RSS was
-  400 MiB. This is a single-process sample with warm filesystem pages; the cold
-  identity cost is real and the cache does not accelerate an isolated first scan.
+  coalesced callers release unused leases.
 - `structural_semantics.py` scans elaborated active instance bindings and
   specialization templates directly, without a ConnectivityIR build. It reports
   input/open-port facts, constant regions of input concatenations and continuous
@@ -1236,14 +1142,7 @@ Verification
   Lexical and semantic coverage are independent; output trimming preserves
   counts and marks `output_truncated`, while computation limits mark partial
   analysis and prevent publishing a completed cache entry.
-  `scripts/benchmark_semantic_scan.py` exercises real dispatch. The 18,642 active
-  instance SoC case produced 14,475 structural facts in 10.17 s (worker peak
-  344 MiB), with no instance/fact/AST cap reached at the default budgets. Coverage
-  remained partial for runtime exclusions and incomplete include identity;
-  the following `auto` call took 8 ms and honestly reported a semantic miss.
-  This normal-design inventory includes legitimate constants and is not a bug
-  count. A 301-instance repeated-wrapper regression also checks that three
-  definition templates suffice when specialization/context actually match.
+  Semantic facts are structural observations, not confirmed defects.
 - Scoped semantic scans can publish compact query IR from the **same** Slang
   frontend build. This requires an existing current hierarchy, an explicit
   `semantic_scope`, an exact reusable query identity, identical ordered
@@ -1276,7 +1175,7 @@ Verification
   effects, force/release, interface/primitive/alias constructs and ambiguous
   net-port reverse drive prevent propagation facts; ordinary unsupported
   expressions remain unknown and mark partial coverage. Procedural assignment
-  targets are boundaries, including `always_comb` in this initial pass.
+  targets are boundaries, including `always_comb`.
   The writer inventory covers all elaborated tops even for a scoped output:
   an unvisited sibling can write a hierarchical target. A budget interruption
   during inventory or solving emits no propagation prefix. After convergence,
@@ -1287,17 +1186,6 @@ Verification
   time/RSS guards still apply. `semantic.propagation` reports inventory status,
   work, bits, unknown/conflict counts, boundaries and gaps. A complete traversal
   does not imply every signal is constant or every design behavior is covered.
-  Tests compare 768 four-state operator cases with Slang's independent
-  constant evaluator, plus multilevel, signed/ascending-bit, multiple-writer,
-  external hierarchical write, sequential, cancellation and budget controls.
-  `scripts/benchmark_structural_propagation.py` completed a generated 18,001
-  instance / five-wrapper-level case in 9.92 s with 39,000 facts and 248 MiB
-  worker peak RSS (one fresh process, 50,000 fact / 1,000,000 work-step limits).
-  This controlled combinational case is not the real SoC. On the 18,642
-  instance OpenTitan/PicoRV32 composition, `benchmark_semantic_scan.py
-  --propagation` took 10.20 s / 349 MiB and retained 14,475 basic facts, but
-  propagation explicitly stopped at unmodeled call write effects. It did not
-  prove full-SoC propagation coverage or publish a completed semantic cache hit.
 - `src/connectivity_backend.py` defines a `ConnectivityBackend` protocol with
   `find_driver`, `find_loads`, and `find_path` methods. `select_backend()`
   returns local `VerdiNpiBackend` when a Verdi KDB is available, or
@@ -1428,11 +1316,7 @@ Verification
   `top_modules_complete` fields: legacy ranked samples cannot establish the
   complete top set, and a capped top listing explicitly reports false.
   Rebuild with `bash scripts/build_wrapper.sh` and reconnect to activate the
-  native ABI. `scripts/benchmark_fsdb_metadata.py --help` describes independent
-  fresh-process metadata, sweep and diff workloads, loaded module/library
-  fingerprints, first preparation, hot queries, RSS and complete fact digests.
-  Timings include nested phases; do not sum them. No OS cache flushing or MCP
-  transport timing is implied.
+  native ABI.
 - `src/waveform_batch.py` provides `WaveformBatchReader` — a time-window
   multi-signal reader with FSDB and VCD implementations sharing the same
   shape. The FSDB path uses `ffrCreateTimeBasedVCTrvsHdl` for a single
@@ -1459,9 +1343,9 @@ This is eager window preparation, so early-exit comparisons still pay its scan
 cost; narrow windows can still scan the selected signals' native prefix.
 Spools, readers and positions expire on close, cancellation or file/epoch change.
 They never enter a persistent cache. Generic page support is an internal
-capability; public analysis gates remain until consumer-specific acceptance.
+capability; public tools require explicit support for each reader capability.
 
-FST cycle and expression queries are now accepted. Sampling preserves integer fs
+FST supports cycle and expression queries. Sampling preserves integer fs
 for both before and after phases, including several edges sharing a public ps
 label; cycle rows additionally expose `time_fs` and `clock_period_fs`. Initial
 observations seed state without inventing a transition; recording boundaries
@@ -1576,9 +1460,7 @@ Metadata declarations use compact immutable records and share parsed scope
 paths/ancestor references. Public rows and range dictionaries are built only
 for IPC output. Accounting includes object/string sizes and container backing
 allocations; shared enum/small scalar objects are conservatively overcharged.
-It replaces the former per-declaration JSON multiplier, not the native memory
-limit. The 32 MiB budget admits the measured 32,189-declaration NIC workload
-(about 24.1 MiB accounted); it is not a general SoC capacity guarantee. A
+The accounting budget is independent of the native memory limit. A
 bounded in-construction record, container resize, sorting and IPC projection
 need additional transient space covered by the 512 MiB process address cap.
 Four admitted workers can each consume that cap; it is not a combined RSS
@@ -1617,37 +1499,7 @@ states and recording gaps through bounded request-local cache slices. They
 never substitute a current recovered input for its earlier sampled value.
 Structural backend identity is independent of waveform format; wave readers
 close before connectivity work. Sub-ps causal scheduling and asynchronous
-assignment values retain their existing explicit proof gaps. Tests in
-`tests/test_fst_*.py` use independent expected event tables and must execute
-with the FST extra installed for FST acceptance.
-
-`scripts/check_fst_readback.py` starts a fresh MCP process and checks every
-waveform tool, including nested expression/packed-field inputs, protocol and
-transaction facts, comparisons, snapshot/history X tracing and log correlation.
-It captures the actually loaded Python paths/hashes inside that server after
-calls and the native identity from the summary. `--require-fsdb` also requires
-native cross-scale point values and exact event-page comparisons in both
-directions. `--installed` exercises an independent wheel outside the checkout;
-the full probe requires both `fst` and `source-graph` extras. Use `--work-dir`
-to retain fixtures and `--output` to save calls and MCP round-trip times (which
-include module fingerprinting). Synthetic compile/log/wave inputs execute the
-parallel hierarchy/structural workflow; zero protocol coverage stays explicit.
-CI installs both extras for the installed-wheel probe; portable operation
-without these extras remains covered separately.
-
-`scripts/benchmark_fst_round2.py --work-dir DIR --generate` writes reproducible
-FST/VCD event tables, including a seeded 1.6-million-event 128-bit workload.
-Run `--workload narrow|dense_clock|metadata|sweep|transactions|compare|large`
-with `--backend fst|vcd --output FILE` in separate processes. Each run performs
-three same-parser requests without flushing OS caches and verifies independent
-expected facts. `--workload lifecycle` measures cancellation through child
-reaping and private-directory removal, timeout cleanup and identity invalidation.
-Receipts include module/native hashes, index accounting, native callbacks,
-spool bytes, JSON size and sampled parent/child RSS. Index RSS deltas include
-allocator/native effects; summed RSS counts shared mappings more than once.
-Independent decompression CPU/bytes and general projection-only time remain
-unavailable. Private worker metrics use Linux `VmHWM`, avoiding inherited
-pre-exec `ru_maxrss`; public operation metrics retain their fixed whitelist.
+assignment values retain their existing explicit proof gaps.
 
 ## Formal Artifact Discovery
 
@@ -1708,28 +1560,9 @@ and cannot be customized or counted by the server.
 
 ### Readback Client Check
 
-`scripts/check_waveform_readback.py` launches an isolated stdio server with
-telemetry disabled and a neutral VCD, without changing client configuration or
-running an EDA tool/model. Its JSON receipt records the launch checkout commit,
-dirty state and server-file digest, the MCP handshake version, SDK-client
-version, tool names/readback schemas, and actual call outcomes/bytes/latency.
-It checks point/batch agreement, initial and uninitialized values, X/Z, missing
-signals, short cycle reads and the recoverable keyword limit. These timings
-are probe observations, not a performance benchmark.
-
-Use `--work-dir /tmp/traceweave-readback-check` to retain the fixture. The
-`ai_client_probe_requests` in the receipt are explicit point/batch calls with
-known expected values. In a separate smoke session, ask the target AI client
-to execute those exact calls using its configured TraceWeave connection, then
-save its version, actually observable tool-catalog evidence, and call results.
-Distinguish a rejected call from a tool the model did not invoke. Leave
-unobservable catalog/version layers `unknown`; the SDK probe cannot attest to
-an AI client's exposure, and neither probe measures natural model adoption.
-Keep this session separate from any formal experiment or agent A/B.
-
-An optional `--server-command <executable> <args...>` checks another local
-stdio installation without claiming its source commit. The installed-wheel
-CI smoke uses the same readback checks, beyond initialize/tools-list alone.
+Run `.venv/bin/python scripts/check_waveform_readback.py --help` for a local
+stdio readback check using a neutral VCD; it needs no EDA tool. Confirm your
+client's tool access separately through its configured TraceWeave connection.
 
 ## Handle-based Hierarchy Access
 
@@ -1782,34 +1615,7 @@ form a proved ancestor binding. The fragment never enumerates siblings, marks
 direct-child coverage as truncated, and carries
 `npi_hierarchy_fragment_bounded`, so it cannot establish an exhaustive negative
 hierarchy claim. It is not invoked by the ordinary hierarchy build and does not
-change NPI/Source Graph/Static routing. The opt-in
-`scripts/benchmark_hierarchy_provider_soc.py` runs NPI and Slang in fresh
-processes and compares only identity-hashed binding facts plus numeric resource
-measurements.
-
-Connectivity semantics have a separate opt-in differential harness,
-`scripts/benchmark_connectivity_differential_soc.py`. A schema-validated corpus
-contains at most 64 exact driver/load/path queries. Compare mode launches one
-fresh NPI child and one fresh Source Graph child. The NPI child calls the loaded
-KDB core directly, so an internal Static fallback cannot make the oracle arm
-look successful. The Source Graph child disables the hierarchy NPI overlay,
-builds compile context once, and evaluates each query against exactly one
-bounded prepared artifact. It deliberately does not copy production frontier
-or fallback orchestration: a missing fact under incomplete projection must
-remain measurable as incomplete coverage.
-
-Provider payloads are reduced before leaving each child. The report contains a
-query digest, positive/fixed status, exact source-line-and-kind fact digests,
-coarser evidence-location and source-file digests, fact counts, coverage and
-exhaustiveness labels, numeric/fixed-label driver/load resource bounds,
-prepare/query timing, cache aggregates, and RSS. It
-contains no signal, instance, source, expression, KDB, or compile-log path.
-Driver/load comparison partitions NPI-only facts according to Source Graph
-exhaustiveness (`coverage_explained` versus `unexpected`) and keeps Source
-Graph-only facts independent. Path comparison uses reachability and hop count,
-because internal hop identities are representation-specific. These are offline
-measurements only: they neither adjudicate NPI as universally correct nor alter
-the trusted-NPI → Source Graph → Static route.
+change NPI/Source Graph/Static routing.
 
 Include preprocessing distinguishes complete context from locally proved
 structural evidence. If an include cannot be resolved, hierarchy facts emitted
@@ -2012,57 +1818,6 @@ consume all retained statements. NPI rows are not grouped this way.
 `retained_evidence_count` counts query statement mappings before provenance
 segments are split. `query_instance_path` identifies the requested instance;
 `resolved_instance_path` keeps the historical first driver's instance.
-
-`scripts/benchmark_source_graph_driver_evidence.py` measures the 8-instance,
-512-statement ascending-bus fixture with bad and corrected wiring. Each repeat
-uses a fresh isolated Slang worker and empty memory cache, then one exact warm
-hit, with private temporary staging and no disk cache or persistent session.
-It reports work/coverage, evidence counts, JSON characters/bytes, query/build and
-serialization time, frontend launches and process RSS. Scope is explicitly the
-fixture's nine instances. Run each revision/variant in a fresh process with the
-same Python and fixture; compare baseline correctness as well as response size.
-The original isolated-query measurements retain their explicit-full indented
-schema basis, excluding routing/recovery receipts. Raw minified backend bytes
-are separate. Version 3 also measures a captured short-path public result and
-actual `call_tool` TextContent, including routing, recovery, dependency and wave
-root-binding receipts. Five fresh runtimes followed by exact warm calls are the
-default; presentation uses 50 repetitions with median/min/max wall and CPU time.
-`artifact_attempt_count=1` in isolated samples still means one explicit prepare;
-the wire harness reads actual artifact attempts from the final receipt. It
-observes `runtime.prepare` metrics for frontend launches because ordinary
-one-shot public receipts can omit that field. Missing public fields are recorded
-as missing, not interpreted as zero launches.
-
-```bash
-driver_bench_dir="$(mktemp -d -t traceweave-driver-a.XXXXXX)"
-.venv/bin/python scripts/benchmark_source_graph_driver_evidence.py \
-  --output-directory "$driver_bench_dir/bad" > "$driver_bench_dir/bad.json"
-.venv/bin/python scripts/benchmark_source_graph_driver_evidence.py --corrected \
-  --output-directory "$driver_bench_dir/fixed" > "$driver_bench_dir/fixed.json"
-.venv/bin/python scripts/benchmark_source_graph_driver_evidence.py --guards 300 \
-  --output-directory "$driver_bench_dir/guards" > "$driver_bench_dir/guards.json"
-```
-
-Use `--guards 100`/`450` for growth samples, `--assignment-limit 80`,
-`--evidence-limit 80` or `--max-depth 0` for bounded analysis, and
-`--memo-bytes 1024` for presentation optimization exhaustion. These benchmark
-overrides are not new MCP parameters. The wire harness always measures the
-public default codec limits, even when the short-path presentation uses a low
-memo budget. Inputs are synthetic source/log/VCD files; no simulator is run.
-The short-path in-memory frontend includes correctly resolved module names;
-older unit-test fixtures with an unrelated scope top can omit those fields.
-The standalone complete IR's S[5] negative and the scoped public query's S[5]
-`unknown` (`hierarchy_projection_scoped`) are different analysis contexts;
-both must roundtrip unchanged, and their claims cannot be interchanged.
-Each comparison uses the same complete captured model without stripping either
-variant's fields. Fixture digests, source-file digests, path shapes, Python,
-frontend version, limits and revision are recorded. Input-resident Python peak
-allocation and process RSS are measured in separate fresh processes for full,
-encode and decode; decode memory starts with its input dict resident. The child
-peak uses `/proc/self/status`'s `VmHWM` because `ru_maxrss` can inherit pre-exec
-parent history. Native-worker RSS and the parent high-water mark are reported
-separately. These timings and byte sizes do not establish client token budgets,
-client spill behavior, or query acceleration.
 
 Explicit driver `compile_context` recovery is orchestrated by the server; the
 context resolver stays read-only. Only `hierarchy_unavailable` can trigger one
@@ -2386,13 +2141,9 @@ verbatim instead of suggesting `build_kdb`.
 
 ## Usage Telemetry (`src/usage_telemetry.py`)
 
-Passive, local-only instrumentation built to answer three operational questions
-with data rather than guesses: *how often are the shipped primitives actually
-used on real workloads?* and *does opt-in Source Graph disk reuse produce exact
-cross-process hits and frontend build skips often enough to justify its lookup,
-validation, and storage cost?* The third is whether metric-bearing Source Graph
-calls repeat within one case and the default 60-second idle window often enough
-to justify retaining a semantic-session frontend process.
+Optional, local-only handler instrumentation records bounded numeric and
+fixed-label aggregates for offline tool-use, cache and semantic-session
+summaries. It does not retain argument values or source text.
 
 - `server.call_tool` wraps `_dispatch` in a `finally` that calls
   `usage_telemetry.record_call(...)`, appending one JSONL line per call to
@@ -2548,17 +2299,6 @@ backend/artifact restarts and request exit release cached observations; final
 wave/compile validation still discards changed evidence. No cross-request
 observation or transaction repository is created. Numeric cache metrics expose
 hits, misses, evictions, bypasses and peaks without names/paths/values.
-
-`scripts/benchmark_divergence_reads.py` compares identical inputs against a
-specified checkout/native library and records first/warm wall time, CPU,
-process peak RSS, read volume, OS I/O counters, cancellation latency and loaded
-source/library hashes. Native dlopen and Python imports are outside its timing;
-first waveform open/index or VCD parse are inside. It never flushes OS caches.
-The existing `benchmark_divergence_trace.py --source-root ...` additionally
-checks independent temporal/graph oracles while counting public calls, event
-reads, native reads and semantic builds; its VCD workloads have zero native
-reads. Hierarchy/scan preparation is outside those trace timings. Reducing
-read calls alone is not a claim of lower elapsed time.
 
 `src/divergence_context.py` freezes each side's exact hierarchy, ordered logs,
 source snapshot and top. Ready driver relays carry those identities into the
@@ -2923,68 +2663,11 @@ bounds the isolated Slang worker, not local NPI; process RSS can grow with a loa
 No hard native RSS isolation is claimed.
 
 
-A sequential fresh-process OpenTitan measurement (October 22, same existing
-clean KDB, local NPI, scope `tb.dut`, two native port categories, 15s/page,
-1,000 scopes initially then 25,000/page, warm filesystem pages) compared the
-previous 32-sibling implementation with identity graph reuse and the bounded
-64/32 policy above. Total public MCP call wall time fell from 154.57s / 49 calls
-to 130.58s / 44 calls (15.5%); charged native calls fell from 4,809,206 to
-4,287,355. Both drained 142,987 instance/generate scopes and reported 12,433
-constant connections, identical category coverage, KDB binding and gap diagnostics.
-`open_input` was complete with zero findings; expression support gaps kept
-`constant_connection` partial. Peak service RSS was 603,840 versus 569,644 KiB
-for these single sequences; this is a process high-water mark, not an allocation
-bound or a general memory-improvement claim. Native/source identity checks,
-per-page call/time limits and frontier/handle caps were retained. These are
-single-workload measurements, not a guarantee for another SoC or license setup.
-
-For opt-in phase profiling through a separate stdio MCP process:
-
-```bash
-.venv/bin/python scripts/profile_structural_scan.py \
-  --compile-log /path/to/build.log --top tb --scope tb.dut \
-  --profile --output /tmp/structural-profile
-```
-
-Omit `--profile` and use a different output directory for an uninstrumented
-control. Both runs retain the normal native/source routes, budgets and
-continuation protocol; default work is the two native port categories, 15s/page,
-1,000 scopes initially and 25,000 thereafter, at most 120 calls. `run.json`
-contains public-call latencies and bounded numeric/hash receipts; `profile.json`
-contains per-call fixed phase names, parent phases, counts, inclusive wall times,
-errors and successful file-validation logical bytes. Nested timings must not be
-added to their parents; direct children of `dispatch` provide a disjoint view of
-the main stages. File-validation bytes are repeated logical work, not physical
-disk I/O. Local native facts are hashed before public trimming for equivalence;
-`local_native_queries=0` means that oracle observed no local native query.
-LSF/Slang worker internals are not instrumented. Normal server processes are
-unchanged; no per-signal/native-call logging or argument/source text enters the
-profile. Reports are private local files and the existing MCP stdout isolation
-remains in effect. Measure control/profile separately to quantify instrumentation
-overhead before drawing performance conclusions.
-
-A targeted run on the same OpenTitan workload above measured 129.68s without
-phase timers and 132.06s with them (1.8% difference); both used separate fresh
-processes with warm filesystem pages. Both took 44 calls, drained 142,987 scopes,
-and produced identical full native fact hashes for 12,433 facts and identical
-per-page progress, coverage, gap hashes and KDB identity. Peak child RSS was
-553,772 / 554,448 KiB. This single pair measures instrumentation overhead for
-this workload, not a general performance bound.
-
-Inclusive phase totals exposed remaining repeated source work: 265 complete
-identity validations took 47.50s, including 24.59s for include resolution and
-9.46s for 341,055 file validations (5.28 GiB of repeated logical input). Each
-identity contained 1,287 file records; its 1,021 include lookups had 707 distinct
-name/search-directory tuples. Preprocessor option replay took 12.97s and compile
-log parsing 9.09s. Native queries took 48.92s including 45.00s in the scan core;
-source supplementation took 32.11s, mostly identity validation, despite `auto`
-returning a source cache miss rather than building Slang. Result model creation,
-output budgeting and serialization together took under 0.8s. These nested totals
-must not be summed. Candidates for another optimization round are consolidating
-redundant validation within a phase, deduplicating identical include lookups and
-reusing validated compile/option processing. Fresh content, alias, include-choice,
-environment and publication checks, cancellation and deadline behavior must
-remain observable; the measured validation time is not a removable-cost claim.
+For opt-in diagnostics, `scripts/profile_structural_scan.py --help` describes
+a separate stdio scan process. `--profile` adds fixed-name phase timings and
+numeric/hash reports without argument or source text. Timings include nested
+phases and must not be summed across parent/child rows. Normal MCP servers
+retain their existing behavior.
 
 ### Continuing a bounded native scan
 
@@ -3052,15 +2735,11 @@ If the client supports server instructions, it can follow the built-in workflow 
 
 ### Claude Code
 
-Environment inheritance depends on how the MCP client itself is launched and on
-that client's environment policy. In one tested terminal-launched `tcsh`/LSF
-setup, Claude Code passed the shell-configured LSF, Verdi, and license variables
-to TraceWeave, and remote NPI driver/load/path queries worked without a separate
-MCP environment list. An IDE/GUI launch or another client setup may not inherit
-the same environment. For a deterministic Claude Code setup, list every variable
-the server needs — tool roots plus the `dlopen` chain (`LD_LIBRARY_PATH` is the
-one most often missed; missing runtime libraries can prevent NPI from loading,
-so inspect `backend_status` when a query falls back).
+Environment inheritance depends on how the MCP client is launched and its
+environment policy. For a deterministic Claude Code setup, list the tool roots,
+license and runtime-library variables required by the server. Missing runtime
+libraries can prevent NPI from loading; inspect `backend_status` when a query
+falls back.
 
 Add this to `~/.claude.json`:
 
@@ -3175,15 +2854,14 @@ setenv TRACEWEAVE_NPI_LSF_QUEUE "$LSF_QUEUE"
 ```
 
 Putting these values in `.bashrc` / `.tcshrc` works only when the MCP client
-passes that shell environment to the TraceWeave server. In the tested
-terminal-launched setup, Claude Code did so and completed LSF-hosted NPI
-driver/load/path queries. Codex required the needed site variables to be named
-in `env_vars`; without them, the NPI attempt failed.
+passes that shell environment to the TraceWeave server. For Codex, explicitly
+forward required parent-shell variables with `env_vars`, or provide fixed
+values under the server's `env` table.
 
 The following Codex configuration is for an EDA environment already established
 by the parent shell. It is an alternative to the fixed-value EDA block in the
-Codex section above. The list reflects one tested LSF/EGO site; add or remove
-names to match the site's setup, and do not repeat any name under `env`:
+Codex section above. Adapt this example LSF/EGO variable list to the site's
+setup, and do not repeat any name under `env`:
 
 ```toml
 [mcp_servers.TraceWeave]
@@ -3226,11 +2904,9 @@ and put a fixed `TRACEWEAVE_NPI_LSF_QUEUE = "digital"` directly under
 `[mcp_servers.TraceWeave.env]` instead. If some EDA values are intentionally
 fixed under `env`, omit those same names from `env_vars`.
 
-In the tested terminal-launched Claude Code setup, no extra MCP environment map
-was needed when the shell already exported both namespaced values and the full
-site environment. For a deterministic setup, or when the client does not inherit
-that shell, merge the following fixed values into the existing TraceWeave
-server's `"env"` object (replace `digital` with the user's queue):
+For Claude Code, merge the following fixed values into the existing TraceWeave
+server's `"env"` object (replace `digital` with the user's queue). Include the
+site's required EDA variables when they are not inherited from the parent shell:
 
 ```json
 {
@@ -3633,16 +3309,8 @@ the default indented response can be larger. Diagnostic summary fields are
 additive. Unicode-heavy results can now reach the existing display downgrade
 earlier; their analyzed counts and coverage are still retained.
 
-Reproduce projection costs with `scripts/benchmark_evidence_output.py`: generate
-a packed VCD with `--generate --wave /tmp/packed.vcd --count 2048 --output
-/tmp/unused.json`, then query it using `--source-root`, `--cap`, `--queries` and
-`--output-format full|compact`. Each source/format belongs in a fresh process;
-the script checks independent accepted-edge and payload timing expectations,
-records loaded source/native hashes, parser-open time, sampling/analysis,
-projection, serialization, output rows/bytes, native calls and peak RSS. It does
-not flush OS caches, and excludes imports, conversion and MCP transport.
-Fewer output bytes do not imply fewer reads or lower analysis memory; compact
-projection allocates temporary Python objects and can cost additional CPU/RSS.
+Compact projection can allocate temporary Python objects; fewer output bytes
+do not imply fewer reads or lower analysis memory.
 
 ## Transaction sampling and bounded facts
 
@@ -3717,22 +3385,11 @@ The additive `analysis` receipt reports available/analyzed samples, read versus
 admitted events, binary value bytes, page output bytes, conservative decoded
 bytes, read/page/legacy counts, state/result/table peaks and sampling,
 reconstruction and projection timings. These bytes describe different layers,
-not interchangeable process RSS measures. Benchmark RSS separately with
-`scripts/benchmark_transactions.py`: generate a VCD with `--generate --wave
-/tmp/transactions.vcd --workload dense --size 16384`, then run without
-`--generate`; `--source-root` selects an isolated checkout. The harness also
-provides long-idle, high-outstanding, multibeat and early-write workloads with
-independent arithmetic expectations, first/hot requests, parser-open cost,
-native call counts and serialization timing. OS caches are not flushed and
-these measurements exclude MCP transport.
+not interchangeable process RSS measures.
 
 There is no cross-call transaction result repository or persistent transaction
 cache. The shared TL-UL input and bounded normalization table have request-local
-lifetimes. Repeated benchmark calls alone are not evidence of an actual repeated
-analysis workflow, and a short mapped sample cannot establish a cache benefit
-for long multibeat/high-outstanding workloads. A future cross-call cache needs
-its own source/artifact/selection/semantic identity and lifecycle evidence;
-Source Graph and structural-scan cache keys do not supply that contract.
+lifetimes.
 
 ### Protocol acceptance sampling
 
@@ -3949,25 +3606,7 @@ bodies. Native workers never discover another KDB or run a fallback backend.
 The strict 4.0 decoder remains valid for old operations; 4.0 rejects the new
 operation. Responses echo the accepted request version, and parent boundaries
 reject version, identity, ownership, query and work-count mismatches. Old full
-context source requests retain their source validation. Real LSF deployment is
-separate from controlled codec/transport verification.
-
-`benchmark_native_first.py` compares frozen workloads over real MCP stdio servers.
-It retains raw requests/responses, instrumented source prepare/current/read and
-frontend counters, server CPU, wall time and sampled process-tree RSS. Fresh and
-warm samples are distinct; OS page caches are uncontrolled. The harness preserves
-venv executable spellings, fixes a common server/frontend working directory and
-journals raw responses (including non-JSON errors) before final aggregation.
-Journal serialization/write time is reported separately and excluded from query
-and prelude wall time; unadjusted elapsed time and each MCP call remain available.
-For comparisons between two native-first revisions, a workload may set
-`baseline_native_first=true`; the default baseline still prepares an explicit
-source handle. Business queries and investigation steps remain identical.
-Scan/prepare overlap
-uses elapsed wall time, never summed parallel durations. License checkout/release
-remain unobserved unless measured independently. Identity/evidence-state
-normalizations are listed beside fact/coverage comparisons; no speedup is implied
-by route counters alone.
+context source requests retain their source validation.
 
 MCP input validation reuses checked JSON Schema validators in a process-local
 LRU (128 entries, 256 KiB of serialized schemas). The key includes the exact

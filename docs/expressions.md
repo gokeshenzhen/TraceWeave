@@ -1,6 +1,6 @@
 # SV / Verilog 表达式查询
 
-复用现有 MCP 工具，不新增表达式工具或持久化虚拟信号。
+现有 MCP 波形工具支持 SV / Verilog 表达式查询，不创建持久化虚拟信号。
 普通字符串仍表示实际信号路径；公式必须放在显式 `expr` 对象中。
 
 ## 直接运行客户端示例
@@ -20,8 +20,7 @@
 四个工具的主说明和 `inputSchema.examples` 提供同一组完整参数，来自
 `src/expression_examples.py`。将示例 `wave_path` 替换为上述 VCD 的绝对路径即可调用。
 脚本输出实际参数和检查结果。第四拍 X 是波形中实际的未知下标；该例的
-`coverage_status=complete`，展示覆盖完整不等于值已知。这里验证客户端通路，
-不代表 AI Agent 的自主使用效果。
+`coverage_status=complete`，覆盖完整不等于值已知。
 
 ## 点查询与周期查询
 
@@ -247,7 +246,7 @@ clock/valid/ready/reset 要求一 bit，`valid_htrans` 要求两 bit。
 选中数据不同会记 `selected_dependency_changed`，索引差异会记 `index_difference`。
 NPI 缺少确定运算/类型/顺序事实时整条重启到 Slang，不混合后端来源。
 
-初始上限：表达式文本 16,384 字符，256 节点、32 层、结果 4,096 bit；
+资源上限：表达式文本 16,384 字符，256 节点、32 层、结果 4,096 bit；
 类型最多 8 个维度，每个稀疏映射最多 128 个元素，每请求最多 128 个表达式。
 事件读取另受 262,144 事件 / 64 MiB 预算、工具采样和位数预算限制，支持取消。
 每个 receipt 最多保留 128 次观察及有界位数证据；超限会明确标记。
