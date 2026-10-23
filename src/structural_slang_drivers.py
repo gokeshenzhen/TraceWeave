@@ -35,6 +35,7 @@ class _Inventory:
         self.session, self.scope, self.categories, self.limits = session, scope, categories, limits
         self.signals, self.parent, self.writers, self.reads, self.blocked = {}, {}, {}, set(), set()
         self.gaps, self.driver_rows, self.facts = set(), {}, []
+        self.driver_refs = {}
         self.source_paths = {}
         self.nodes = self.instances = self.bits = self.work = 0
         self.complete = False
@@ -136,7 +137,19 @@ class _Inventory:
         if left == right:
             return
         self.parent[right] = left
-        self.writers.setdefault(left, set()).update(self.writers.pop(right, ()))
+        incoming = self.writers.pop(right, None)
+        if incoming is None:
+            return
+        current = self.writers.get(left)
+        if current is None:
+            self.writers[left] = incoming
+        elif isinstance(current, set):
+            current.update(incoming if isinstance(incoming, set) else (incoming,))
+        elif isinstance(incoming, set):
+            incoming.add(current)
+            self.writers[left] = incoming
+        elif current != incoming:
+            self.writers[left] = {current, incoming}
 
     def claim(self, targets, writer):
         continuous = self.driver_rows[writer]['kind'] in {'continuous_assignment', 'net_initializer'}
@@ -147,11 +160,26 @@ class _Inventory:
             # Continuous concatenations also retain repeated LHS positions.
             suffix = ':' + str(position) if continuous else ''
             identity = hashlib.sha256((writer + ':' + repr(bit) + suffix).encode()).hexdigest()
-            self.driver_rows[identity] = {**self.driver_rows[writer], 'driver_id':identity,
-                                         'target_signal':bit[0], 'target_bits':[bit[1]]}
-            if continuous:
-                self.driver_rows[identity]['assignment_lsb_offset'] = len(targets)-1-position
-            self.writers.setdefault(self.root(bit), set()).add(identity)
+            # Keep shared source metadata and a compact bit reference until a
+            # fact actually needs it. Most bits have one writer, so allocate a
+            # set only when an independent source joins that physical net.
+            self.driver_refs[identity] = (writer, bit, len(targets)-1-position if continuous else None)
+            root = self.root(bit)
+            current = self.writers.get(root)
+            if current is None:
+                self.writers[root] = identity
+            elif isinstance(current, set):
+                current.add(identity)
+            elif current != identity:
+                self.writers[root] = {current, identity}
+
+    def driver_row(self, identity):
+        writer, bit, offset = self.driver_refs[identity]
+        row = {**self.driver_rows[writer], 'driver_id':identity,
+               'target_signal':bit[0], 'target_bits':[bit[1]]}
+        if offset is not None:
+            row['assignment_lsb_offset'] = offset
+        return row
 
     def block(self, node, instance, reason):
         names = set()
@@ -363,7 +391,8 @@ class _Inventory:
                 groups = {}
                 for bit in signal.bits:
                     root = self.root((name, bit))
-                    writers = self.writers.get(root, ())
+                    known = self.writers.get(root, ())
+                    writers = (known,) if isinstance(known, str) else known
                     complete = self.complete and root not in blocked
                     if root in blocked and root in reads and not signal.excluded:
                         self.gaps.add('driver_bits_unresolved')
@@ -378,7 +407,7 @@ class _Inventory:
                     if len(self.facts) >= self.limits.max_facts:
                         raise _Limit('driver_fact_limit')
                     self.facts.append(driver_fact(kind, name, bits,
-                        [self.driver_rows[w] for w in writers], complete=complete,
+                        [self.driver_row(w) for w in writers], complete=complete,
                         source=signal.source, net_kind=signal.net_kind))
         except _Limit as exc:
             self.gaps.add(str(exc))

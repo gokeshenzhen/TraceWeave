@@ -80,6 +80,21 @@ endmodule
     assert result['status']=='complete',result['gaps']
 
 
+@pytest.mark.parametrize('parent_count,child_count',[(1,1),(1,2),(2,1),(2,2)])
+def test_net_port_collapse_merges_all_independent_sources(tmp_path,parent_count,child_count):
+    child=''.join(f"assign q=1'b{index%2};" for index in range(child_count))
+    parent=''.join(f"assign y=1'b{index%2};" for index in range(parent_count))
+    result=scan(tmp_path,'module leaf(output wire q);'+child+'''endmodule
+module top(output wire y);'''+parent+'leaf l(y);endmodule')
+    assert result['status']=='complete',result['gaps']
+    facts={f['signal_path']:f for f in result['facts']}
+    assert set(facts)=={'top.y','top.l.q'}
+    for fact in facts.values():
+        assert fact['kind']=='multiple_driver'
+        assert fact['driver_count']==parent_count+child_count
+        assert len({d['driver_id'] for d in fact['drivers']})==parent_count+child_count
+
+
 def test_cross_hierarchy_writes_are_included_for_scoped_output(tmp_path):
     result = scan(tmp_path, '''
 module leaf(output wire [3:0] y);wire [3:0] n;assign y=n;endmodule
