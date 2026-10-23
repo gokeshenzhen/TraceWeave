@@ -2922,6 +2922,22 @@ native calls/ports/scopes separately from Slang AST visits. `semantic_max_rss_mi
 bounds the isolated Slang worker, not local NPI; process RSS can grow with a loaded KDB.
 No hard native RSS isolation is claimed.
 
+
+A sequential fresh-process OpenTitan measurement (October 22, same existing
+clean KDB, local NPI, scope `tb.dut`, two native port categories, 15s/page,
+1,000 scopes initially then 25,000/page, warm filesystem pages) compared the
+previous 32-sibling implementation with identity graph reuse and the bounded
+64/32 policy above. Total public MCP call wall time fell from 154.57s / 49 calls
+to 130.58s / 44 calls (15.5%); charged native calls fell from 4,809,206 to
+4,287,355. Both drained 142,987 instance/generate scopes and reported 12,433
+constant connections, identical category coverage, KDB binding and gap diagnostics.
+`open_input` was complete with zero findings; expression support gaps kept
+`constant_connection` partial. Peak service RSS was 603,840 versus 569,644 KiB
+for these single sequences; this is a process high-water mark, not an allocation
+bound or a general memory-improvement claim. Native/source identity checks,
+per-page call/time limits and frontier/handle caps were retained. These are
+single-workload measurements, not a guarantee for another SoC or license setup.
+
 ### Continuing a bounded native scan
 
 A work-limited scan that made progress returns `semantic.continuation` and a
