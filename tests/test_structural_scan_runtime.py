@@ -78,7 +78,6 @@ def test_coarsened_stat_identity_cannot_hide_content_change(tmp_path, monkeypatc
 
 
 def test_exact_identity_reuse_still_checks_bytes_and_include_shadowing(tmp_path, monkeypatch):
-    import src.design_identity as module
     early, late = tmp_path / 'early', tmp_path / 'late'
     early.mkdir(); late.mkdir()
     (late / 'defs.svh').write_text('`define WIDTH 8\n')
@@ -86,11 +85,12 @@ def test_exact_identity_reuse_still_checks_bytes_and_include_shadowing(tmp_path,
     result['compile_command'] += f' +incdir+{early}+{late}'
     reader = DesignIdentityReader()
     first = reader.capture(str(log), result)
-    # A hit bypasses graph reconstruction, but content hashing remains mandatory.
-    original = module.extract_preprocessor_options
-    monkeypatch.setattr(module, 'extract_preprocessor_options', lambda *a: pytest.fail('rebuilt unchanged graph'))
+    # A hit bypasses graph reconstruction; option replay and content hashing
+    # remain mandatory to detect directory aliases and external path bindings.
+    original = reader._read
+    monkeypatch.setattr(reader, '_read', lambda *a: pytest.fail('rebuilt unchanged graph'))
     assert reader.capture(str(log), result) is first
-    monkeypatch.setattr(module, 'extract_preprocessor_options', original)
+    monkeypatch.setattr(reader, '_read', original)
     (early / 'defs.svh').write_text('`define WIDTH 16\n')
     second = reader.capture(str(log), result)
     assert second.digest != first.digest and second is not first
@@ -264,3 +264,29 @@ async def test_identity_lease_survives_hierarchy_completion_on_scan_miss(tmp_pat
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize('change', ['environment', 'directory_alias'])
+def test_identity_reuse_refreshes_external_include_search_paths(tmp_path, monkeypatch, change):
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    a.mkdir(); b.mkdir()
+    (a / 'defs.svh').write_text('`define WIDTH 8\n')
+    (b / 'defs.svh').write_text('`define WIDTH 16\n')
+    log, source, result = context(tmp_path, '`include "defs.svh"\nmodule top; endmodule\n')
+    alias = tmp_path / 'include'
+    if change == 'environment':
+        monkeypatch.setenv('TW_IDENTITY_INCLUDE', str(a))
+        result['compile_command'] += ' +incdir+$TW_IDENTITY_INCLUDE'
+    else:
+        alias.symlink_to(a, target_is_directory=True)
+        result['compile_command'] += f' +incdir+{alias}'
+    reader = DesignIdentityReader()
+    first = reader.capture(str(log), result)
+    assert first.complete and reader.capture(str(log), result) is first
+    if change == 'environment':
+        monkeypatch.setenv('TW_IDENTITY_INCLUDE', str(b))
+    else:
+        alias.unlink();alias.symlink_to(b, target_is_directory=True)
+    second = reader.capture(str(log), result)
+    assert second.complete and second.digest != first.digest
+    assert any(r.path == str(b / 'defs.svh') for _, r in second.records)

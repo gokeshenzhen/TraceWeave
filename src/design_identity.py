@@ -159,17 +159,21 @@ class DesignIdentityReader:
 
     def capture(self, compile_log: str, compile_result: dict, *, reader=read_source_content) -> DesignIdentity:
         check_cancelled()
+        inputs = [str(f["path"]) for f in compile_result.get("files", {}).get("user", []) if f.get("path")]
+        # Option replay resolves environment variables, command files and
+        # directory aliases. Refresh it before memo lookup: unchanged source
+        # bytes alone cannot prove that an include search path is unchanged.
+        options = extract_preprocessor_options(compile_result, inputs[0] if inputs else compile_log)
         context_key = _digest({"version": IDENTITY_VERSION, "compile_log": compile_log,
-                               "context": compile_result})
+                               "context": compile_result, "cwd": os.getcwd(),
+                               "options": [options.macros, options.include_dirs, options.complete]})
         cached = self._cached_identity(context_key)
         if cached is not None:
             return cached
-        inputs = [str(f["path"]) for f in compile_result.get("files", {}).get("user", []) if f.get("path")]
         issues = set()
         includes_complete = True
         if not inputs or compile_result.get("parse_warnings"):
             issues.add("compile_inputs_incomplete")
-        options = extract_preprocessor_options(compile_result, inputs[0] if inputs else compile_log)
         if not options.complete:
             issues.add("compile_options_incomplete")
         support = _compile_evidence_support_paths(compile_result) | _include_support_paths(compile_result)

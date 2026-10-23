@@ -1191,7 +1191,8 @@ Verification
   and 16 MiB of digest/include facts, never persistent source bodies. The identity
   reader additionally retains at most four complete immutable identity graphs /
   8 MiB of estimated metadata (bounded further by its configured capacity).
-  An exact compile-context hit still hashes current bytes, validates aliases and
+  An exact compile-context hit still replays preprocessor options (including
+  environment-dependent paths and directory aliases), hashes current bytes and
   re-resolves literal includes, including earlier shadow candidates; it skips
   rebuilding the unchanged graph. Incomplete/oversized identities bypass this
   tier. No source bodies or semantic coverage proof enter it. A warm result hit
