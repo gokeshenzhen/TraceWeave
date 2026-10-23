@@ -6132,8 +6132,8 @@ def _signal_selection_definitions() -> dict:
     definitions = expression.pop("$defs", {})
     definitions["WaveformExpression"] = expression
     definitions["WaveformSignalInput"] = {
-        "description": "Paths, fixed bit selections, or {expr,...}. Types are explicit; "
-                       "wave_bits opts into unsigned dump vectors.",
+        "description": "Paths/selections/{expr,...}; explicit types or "
+                       "unsigned dump vectors via wave_bits.",
         "anyOf": [{"type": "string"}, {"$ref": "#/$defs/WaveformSelection"},
                   {"$ref": "#/$defs/WaveformExpression"}]
     }
@@ -6342,18 +6342,15 @@ async def list_tools():
         Tool(
             name="explain_property",
             description=(
-                "Explain an already located SystemVerilog assertion as a bounded typed temporal graph. "
-                "Accepts one text/source target or ordered items with unique IDs; explicitly named units "
-                "share declarations, parameters, macros and default clocks without merging unrelated scopes. "
-                "Use target / instance_path / line to select one definition or directive. Definitions and "
-                "fragments do not imply an active assert. Requires optional pyslang in the existing Source Graph "
-                "interpreter, runs in an isolated worker, and never invokes simulation, proof or an LLM. "
-                "Read syntax_status, semantic_status, context_status and gaps separately. Graphs preserve "
-                "matching alternatives, per-match obligations, multiple clocks, local state and recursive "
-                "references. run_anchor associates an exact get_sim_paths/get_formal_paths discovery; "
-                "unassociated text remains mode=unknown. Formal discovery never proves enabled assumptions "
-                "or property outcomes. Missing support includes a source fragment and recovery advice; "
-                "additional AI reasoning must remain labelled inference. No waveform lock or failed log is required."
+                "Explain located SVA text/source as a bounded typed graph of matches, obligations, "
+                "clocks, locals and recursion. One target or ordered items with unique IDs; units "
+                "share declarations/macros/parameters/clocks within explicit scopes. Select "
+                "target/instance_path/line; definitions/fragments imply no active assert. Optional "
+                "pyslang in the Source Graph interpreter; isolated worker, no simulation/proof/LLM "
+                "or wave lock. Read syntax_status, semantic_status, context_status and gaps. "
+                "run_anchor links exact get_sim_paths/get_formal_paths discovery; otherwise mode "
+                "unknown. Formal discovery proves neither enabled roles nor outcomes. Gaps include "
+                "source/recovery; label extra AI reasoning as inference. No failed log required."
             ),
             inputSchema=schemas.ExplainPropertyOptions.model_json_schema(),
         ),
@@ -8308,10 +8305,10 @@ async def list_tools():
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (
-                " Signals accept paths, selections or {expr,bindings,types}; input $defs document typing/array rules. "
-                "Read expressions.coverage_status/gaps: "
-                "partial/not_observed cannot exclude problems; X/Z is not missing data. observations_truncated "
-                "caps display only. error means failure; follow error_code/recovery before retrying.")
+                " Signals: paths, selections or {expr,bindings,types}; see input $defs for typing/arrays. "
+                "Check expressions.coverage_status/gaps: partial/not_observed cannot exclude issues; "
+                "X/Z is observed data. observations_truncated limits display only. "
+                "error means failure; follow error_code/recovery before retrying.")
         if tool.name in schemas.COMPACT_OUTPUT_TOOLS:
             properties.update(schemas.output_options_for_tool(tool.name).model_json_schema()["properties"])
         if tool.name == "explain_signal_driver":

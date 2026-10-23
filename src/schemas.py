@@ -75,10 +75,9 @@ class EvidenceOutputOptions(SchemaModel):
     output_format: Literal["full", "compact"] = Field(
         default="full",
         description=(
-            "full preserves the original result. compact returns a lossless "
-            "traceweave.compact.v1 envelope: result plus response-local selection "
-            "references. Coverage and display limits are unchanged; references "
-            "are JSON pointers, not time cursors or stored result handles."
+            "full: original result. compact: lossless traceweave.compact.v1 "
+            "{result,references}; refs are response-local JSON pointers, not cursors/handles. "
+            "Same coverage/display limits."
         ),
     )
 
@@ -898,7 +897,7 @@ class SignalValue(SchemaModel):
 
 
 class WaveformSelection(SchemaModel):
-    """One exact dump declaration, with ordered declared bits or lsb + width."""
+    """Exact dump declaration: ordered bits or lsb+width."""
     path: str = Field(min_length=1, max_length=16384, description="Exact declaration path returned by search_signals.")
     bits: list[StrictInt] | None = Field(default=None, min_length=1, max_length=4096,
         description="Unique declared indices, MSB first. Supply bits OR lsb+width.")
@@ -941,7 +940,7 @@ ExpressionRange = Annotated[
 
 
 class ExpressionType(SchemaModel):
-    """Caller-supplied integral type; width is the packed element width."""
+    """Explicit integral type; width is packed bits per element."""
     width: StrictInt = Field(ge=1, le=4096, description="Total packed bits per element; {width:8} describes unsigned [7:0].")
     signed: bool = Field(default=False, description="Declared signedness; default unsigned.")
     two_state: bool = Field(default=False, description="True for two-state; default four-state.")
@@ -950,7 +949,7 @@ class ExpressionType(SchemaModel):
     unpacked: list[ExpressionRange] = Field(default_factory=list, max_length=8,
         description="Unpacked [left,right] ranges, outermost first; requires elements or path_template.")
     members: list[ExpressionMember] = Field(default_factory=list, max_length=128,
-        description="Packed struct/union layout: name, lsb offset, type. For packed arrays, describe the innermost aggregate; its final packed range is the aggregate's flattened bits.")
+        description="Packed struct/union: name, lsb, type. Packed arrays use the innermost aggregate; its final packed range is flattened bits.")
 
 
 class ExpressionElement(SchemaModel):
@@ -959,11 +958,11 @@ class ExpressionElement(SchemaModel):
 
 
 class ExpressionArray(SchemaModel):
-    """Sparse elements or a bounded one-dimensional path template."""
+    """Sparse elements or bounded 1D path template."""
     elements: list[ExpressionElement] = Field(default_factory=list, max_length=128,
         description="Exact sparse mappings. Missing elements remain missing evidence.")
     path_template: str | None = Field(default=None, min_length=1, max_length=16384,
-        description="Alternative to elements: one {index}, e.g. tb.mem[{index}][7:0]; expand types.<name>.unpacked (1D, at most 128 elements).")
+        description="Instead of elements: one {index}, e.g. tb.m[{index}][7:0]; expand types.<name>.unpacked (1D, <=128).")
 
     @model_validator(mode="after")
     def check_mapping(self):
@@ -978,19 +977,19 @@ class ExpressionArray(SchemaModel):
 
 
 class WaveformExpression(SchemaModel):
-    """Read-only SV expression, re-evaluated at each sample."""
+    """Read-only SV expression evaluated per sample."""
     expr: str = Field(min_length=1, max_length=16384,
-        description="SV value expression, e.g. a[i], data[base+:W], valid && ready, or $countones(mask). No assignments, user functions or temporal syntax.")
+        description="SV values, e.g. a[i], data[base+:W], $countones(mask); no assignments, user functions or temporal syntax.")
     typing: Literal["semantic", "wave_bits"] = Field(default="semantic",
-        description="semantic needs declared types in types; wave_bits opts into unsigned dump-vector inference. Public queries do not load RTL types automatically.")
+        description="semantic: types required. wave_bits: unsigned dump vectors. No automatic RTL type loading.")
     scope: str | None = Field(default=None, max_length=16384,
-        description="Prefix for unbound names, e.g. tb.dut. Explicit bindings override it; this is not a type provider.")
+        description="Unbound-name prefix, e.g. tb.dut; bindings override. Not a type source.")
     bindings: dict[str, str | WaveformSelection | ExpressionArray] = Field(default_factory=dict, max_length=128,
-        description="Names to exact search_signals paths, fixed selections, or array bindings. Bare strings are paths.")
+        description="Names to exact search_signals paths, fixed selections or arrays.")
     types: dict[str, ExpressionType] = Field(default_factory=dict, max_length=128,
-        description="Declared operand types and named cast types. Supply signedness and array/member layout when relevant; dump width alone cannot prove them.")
+        description="Declared operand/cast types: signedness and array/member layout; dump width cannot infer these.")
     constants: dict[str, str] = Field(default_factory=dict, max_length=128,
-        description="Named integral constants as SV text, e.g. {W: '8'} for a fixed slice width. No automatic parameter/macro lookup.")
+        description="Integral SV text, e.g. {W:'8'} for slice width. No parameter/macro lookup.")
 
 
 ExpressionMember.model_rebuild()
