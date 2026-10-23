@@ -157,6 +157,24 @@ module top(input [1:0] a,output q);leaf l(a,{q,q});endmodule
     assert fact['target_bits']==[0]
 
 
+def test_continuous_concat_keeps_distinct_driver_positions(tmp_path):
+    result=scan(tmp_path,'''module top(input a,b,output wire q);
+assign {q,q}={a,b};endmodule''')
+    fact=next(f for f in result['facts'] if f['signal_path']=='top.q')
+    assert result['status']=='complete',result['gaps']
+    assert fact['kind']=='multiple_driver' and fact['driver_count']==2
+    assert {d['assignment_lsb_offset'] for d in fact['drivers']}=={0,1}
+
+
+def test_resized_output_binding_does_not_claim_complete_bit_mapping(tmp_path):
+    result=scan(tmp_path,'''module leaf(input [1:0] a,output reg [1:0] y);
+always @* y=a;endmodule
+module top(input [1:0] a,output q);leaf l(a,{q,q,q});endmodule''')
+    assert result['status']=='partial'
+    assert 'driver_output_width_conversion_boundary' in result['gaps']
+    assert not any(f['kind']=='undriven_signal' for f in result['facts'])
+
+
 def test_automatic_and_initialized_subroutine_locals_are_not_undriven(tmp_path):
     result=scan(tmp_path,'''module top(input a,output y,z);
 function automatic logic f(input b);logic t;return t;endfunction

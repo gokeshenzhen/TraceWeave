@@ -135,13 +135,18 @@ class _Inventory:
         self.writers.setdefault(left, set()).update(self.writers.pop(right, ()))
 
     def claim(self, targets, writer):
-        for bit in targets:
+        continuous = self.driver_rows[writer]['kind'] in {'continuous_assignment', 'net_initializer'}
+        for position, bit in enumerate(targets):
             # Preserve a writer's original logical bit before net collapse.
             # Two bits of one vector may be wired onto the same physical net;
             # repeated assignments to the SAME bit in one process remain one.
-            identity = hashlib.sha256((writer + ':' + repr(bit)).encode()).hexdigest()
+            # Continuous concatenations also retain repeated LHS positions.
+            suffix = ':' + str(position) if continuous else ''
+            identity = hashlib.sha256((writer + ':' + repr(bit) + suffix).encode()).hexdigest()
             self.driver_rows[identity] = {**self.driver_rows[writer], 'driver_id':identity,
                                          'target_signal':bit[0], 'target_bits':[bit[1]]}
+            if continuous:
+                self.driver_rows[identity]['assignment_lsb_offset'] = len(targets)-1-position
             self.writers.setdefault(self.root(bit), set()).add(identity)
 
     def block(self, node, instance, reason):
@@ -271,6 +276,8 @@ class _Inventory:
                             self.claim((target,),writer)
                     else:
                         self.claim(external, self.writer(port, path, 'output_binding', str(port.name)))
+                        self.blocked.update(external)
+                        self.gaps.add('driver_output_width_conversion_boundary')
                     if signal.net_kind != 'variable':
                         self.blocked.update(internal)
                         self.gaps.add('driver_output_net_conversion_boundary')
