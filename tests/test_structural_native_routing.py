@@ -10,6 +10,7 @@ import server
 from src import structural_native_runtime as native
 from src.design_backend_binding import ExecutionBindingChanged
 from src.design_context_runtime import ContextUnavailable
+from src.design_identity import DesignIdentity
 from src.kdb_anchor import KdbBindingChanged
 from src.npi_hierarchy_source import NpiHierarchyUnavailable
 from src.structural_scan_runtime import StructuralScanRuntime
@@ -70,6 +71,137 @@ async def test_auto_is_native_first_and_default_comparison_remains_missing(setup
     assert payload['semantic']['status'] == 'complete'
     summary = server._extract_structural_scan_summary(server._result_cache['scan_structural_risks'])
     assert summary['semantic_category_coverage'][0]['backend'] == 'verdi_npi'
+
+
+@pytest.mark.anyio
+async def test_auto_cache_miss_checks_source_once_after_native(setup, monkeypatch):
+    args, _, _ = setup
+    original_current, query = DesignIdentity.current, native.query_native_scan
+    in_semantic, validations = False, []
+    def current(identity):
+        if in_semantic:
+            validations.append(identity.digest)
+        return original_current(identity)
+    def run(*a, **kw):
+        nonlocal in_semantic
+        result = query(*a, **kw)
+        in_semantic = True
+        return result
+    monkeypatch.setattr(DesignIdentity, 'current', current)
+    monkeypatch.setattr(native, 'query_native_scan', run)
+    r = await server._dispatch('scan_structural_risks', args)
+    assert r.semantic.status == 'partial' and not r.semantic.termination_reason
+    assert len(validations) == 1
+    missing = next(c for c in r.semantic.category_coverage if c.category == 'constant_comparison')
+    assert missing.status == 'not_run' and 'semantic_cache_miss' in missing.gaps
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('phase', ['native', 'cache_probe'])
+@pytest.mark.parametrize('change', ['bytes', 'include_choice'])
+async def test_auto_miss_final_guard_discards_changed_source(setup, monkeypatch, phase, change):
+    from src.compile_session_snapshot import FileContentSnapshot
+    args, _, source = setup
+    if change == 'include_choice':
+        source.write_text('`include "late.svh"\n' + source.read_text())
+    def mutate():
+        if change == 'bytes':
+            source.write_text(source.read_text().replace(' x;', ' y;'))
+        else:
+            (source.parent / 'late.svh').write_text('`define NEW 1\n')
+    # Full hashing and include-choice checks must survive timestamp coarsening.
+    monkeypatch.setattr(FileContentSnapshot, 'current', lambda _: True)
+    query = native.query_native_scan
+    def run(*a, **kw):
+        result = query(*a, **kw)
+        if phase == 'native':
+            mutate()
+        return result
+    async def probe(*a, **kw):
+        if phase == 'cache_probe':
+            mutate()
+        return None, None
+    monkeypatch.setattr(native, 'query_native_scan', run)
+    monkeypatch.setattr(server, '_structural_query_context', probe)
+    r = await server._dispatch('scan_structural_risks', args)
+    assert r.semantic.termination_reason == 'compile_metadata_or_native_identity_changed'
+    assert not r.semantic.facts and not r.semantic.continuation
+    assert server._structural_native_runtime._backend is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('change', ['before_reuse', 'during_reuse'])
+async def test_auto_cached_source_has_content_guards_before_and_after_reuse(setup, monkeypatch, change):
+    from src import structural_semantic_runtime
+    args, _, source = setup
+    async def build(payload, python):
+        return dict(status='complete', categories_checked=payload['categories'],
+                    facts=[{'kind':'constant_comparison'}], total_facts=1,
+                    counts={'constant_comparison':1}, gaps=[])
+    monkeypatch.setattr(structural_semantic_runtime, 'run_isolated_scan', build)
+    first = await server._dispatch('scan_structural_risks', {**args, 'analysis_mode':'deep'})
+    assert first.semantic.status == 'complete'
+    original_current, query = DesignIdentity.current, native.query_native_scan
+    in_semantic, validations = False, []
+    def current(identity):
+        if in_semantic:
+            validations.append(identity.digest)
+        return original_current(identity)
+    def run(*a, **kw):
+        nonlocal in_semantic
+        result = query(*a, **kw)
+        in_semantic = True
+        return result
+    monkeypatch.setattr(DesignIdentity, 'current', current)
+    monkeypatch.setattr(native, 'query_native_scan', run)
+    second = await server._dispatch('scan_structural_risks', args)
+    assert second.semantic.status == 'complete' and second.semantic.backend == 'mixed'
+    assert second.semantic.cache_disposition == 'hit_memory' and len(validations) == 2
+    cache = server._semantic_scan_runtime._cache
+    if change == 'before_reuse':
+        def changed_query(*a, **kw):
+            result = run(*a, **kw)
+            source.write_text(source.read_text().replace(' x;', ' y;'))
+            return result
+        monkeypatch.setattr(native, 'query_native_scan', changed_query)
+    class ChangeDuringRead(type(cache)):
+        def __getitem__(self, key):
+            assert change == 'during_reuse', 'a stale source cache was consumed'
+            data = super().__getitem__(key)
+            source.write_text(source.read_text().replace(' x;', ' y;'))
+            return data
+    monkeypatch.setattr(server._semantic_scan_runtime, '_cache', ChangeDuringRead(cache))
+    third = await server._dispatch('scan_structural_risks', args)
+    assert third.semantic.termination_reason == 'compile_metadata_or_native_identity_changed'
+    assert not third.semantic.facts
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('change', ['native_policy', 'source_policy', 'cancel', 'timeout'])
+async def test_auto_cache_probe_retains_terminal_request_guards(setup, monkeypatch, change):
+    args, _, _ = setup
+    monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '1')
+    async def probe(*a, **kw):
+        if change == 'native_policy':
+            monkeypatch.setenv('TRACEWEAVE_NPI_EXECUTION', 'lsf')
+        elif change == 'source_policy':
+            monkeypatch.setenv('TRACEWEAVE_SOURCE_GRAPH', '0')
+        elif change == 'cancel':
+            raise asyncio.CancelledError()
+        else:
+            await asyncio.sleep(.1)
+        return None, None
+    def forbidden(*a, **kw):
+        pytest.fail('a terminal cache probe advanced source work')
+    monkeypatch.setattr(server, '_structural_query_context', probe)
+    monkeypatch.setattr(server._semantic_scan_runtime, 'scan', forbidden)
+    if change == 'cancel':
+        with pytest.raises(asyncio.CancelledError):
+            await server._dispatch('scan_structural_risks', args)
+    else:
+        r = await server._dispatch('scan_structural_risks', {**args, 'semantic_timeout_sec':.05})
+        expected = 'semantic_timeout' if change == 'timeout' else 'npi_execution_policy_changed'
+        assert r.semantic.termination_reason == expected and not r.semantic.facts
 
 
 @pytest.mark.anyio

@@ -9833,14 +9833,21 @@ async def _dispatch_inner(name: str, args: dict):
                 await validate()
                 if get_source_graph_execution_config() != semantic_config:
                     raise ExecutionBindingChanged()
+            async def source_identity_guard():
+                await source_guard()
                 if identity.complete and not await _run_in_cancellable_thread(identity.current):
                     from src.native_query import NativeInputChanged
                     raise NativeInputChanged("structural_source_identity_changed")
-            await source_guard()
+            # Auto probes only existing source artifacts. The semantic runtime
+            # validates content before consuming a positive cache/IR candidate;
+            # probing a miss needs only the request guards and a final content
+            # check. Deep keeps full validation around preparation/build work.
+            guard = source_identity_guard if analysis_mode == "deep" else source_guard
+            await guard()
             query_request, query_runtime = await _structural_query_context(
                 args["compile_log"], simulator, semantic_options["scope"], analysis_mode, semantic_config,
             )
-            await source_guard()
+            await guard()
             source_options = {**semantic_options, "categories": missing,
                               "timeout_sec": min(semantic_options["timeout_sec"], deadline-time.monotonic())}
             raw = await _semantic_scan_runtime.scan(
@@ -9848,9 +9855,9 @@ async def _dispatch_inner(name: str, args: dict):
                 compile_log=args["compile_log"], compile_result=compile_result,
                 config=semantic_config, run_thread=_run_in_cancellable_thread,
                 query_request=query_request, query_runtime=query_runtime,
-                deadline=deadline, validate=source_guard, selected_top=args.get("top_hint"),
+                deadline=deadline, validate=guard, selected_top=args.get("top_hint"),
             )
-            await source_guard()
+            await source_identity_guard()
             observed = bool(raw.get("categories_checked") or raw.get("facts"))
             raw["artifact_identity"] = identity.digest if observed else None
             raw["selected_top"] = args.get("top_hint")

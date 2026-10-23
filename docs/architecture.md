@@ -1145,6 +1145,11 @@ Verification
   Lexical and semantic coverage are independent; output trimming preserves
   counts and marks `output_truncated`, while computation limits mark partial
   analysis and prevent publishing a completed cache entry.
+  `auto` cache probing keeps metadata/policy/deadline guards without repeatedly
+  validating source content for absent candidates. Positive source reuse still
+  requires content validation, and every supplementation attempt retains final
+  source-content validation, including a cache miss. `deep` keeps full source
+  guards around preparation and construction.
   Semantic facts are structural observations, not confirmed defects.
 - Scoped semantic scans can publish compact query IR from the **same** Slang
   frontend build. This requires an existing current hierarchy, an explicit
