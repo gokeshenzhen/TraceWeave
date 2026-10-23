@@ -16,9 +16,10 @@ from .slang_connectivity_projector import (
     _parameterization, _unwrap_expression,
 )
 
-SEMANTIC_RULE_VERSION = "2"
+SEMANTIC_RULE_VERSION = "3"
 DEFAULT_SEMANTIC_CATEGORIES = ("constant_connection", "open_input", "constant_comparison")
-SEMANTIC_CATEGORIES = (*DEFAULT_SEMANTIC_CATEGORIES, "propagated_constant", "constant_control")
+SEMANTIC_CATEGORIES = (*DEFAULT_SEMANTIC_CATEGORIES, "propagated_constant", "constant_control",
+                       "multiple_driver", "undriven_signal")
 
 
 @dataclass(frozen=True)
@@ -231,6 +232,15 @@ def scan_semantic_session(session, *, scope=None, categories=DEFAULT_SEMANTIC_CA
     if not bindings:
         gaps.add("scope_not_elaborated")
     propagation = {"status": "not_run"}
+    from .structural_driver_facts import DRIVER_CATEGORIES
+    if set(categories) & DRIVER_CATEGORIES:
+        from .structural_slang_drivers import scan_slang_drivers
+        drivers = scan_slang_drivers(session, scope=scope, categories=categories,
+            limits=replace(limits, max_ast_nodes=max(0, limits.max_ast_nodes-nodes),
+                           max_facts=max(0, limits.max_facts-len(facts))))
+        gaps.update(drivers['gaps'])
+        facts.extend(drivers['facts'])
+        counts.update(f['kind'] for f in drivers['facts'])
     if set(categories) & {"propagated_constant", "constant_control"}:
         from .structural_propagation import propagate_session
         propagated = propagate_session(session, scope=scope, categories=categories,

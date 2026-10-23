@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 
+from .structural_driver_facts import DRIVER_CATEGORIES
+
 NPI_PORT_CATEGORIES = frozenset({"constant_connection", "open_input"})
 
 
@@ -76,7 +78,8 @@ def combine_semantics(options, native=None, source=None, *, attempts=(), elapsed
             "total_facts": ((raw or {}).get('counts', {}).get(category, len(rows))
                             if backend == 'verdi_npi' and (raw or {}).get('scan_progress') else len(rows)),
             "gaps": list(receipt.get("gaps", [])),
-            "evidence_domain": "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics",
+            "evidence_domain": ("elaborated_static_drivers" if category in DRIVER_CATEGORIES
+                                else "elaborated_input_ports" if backend == "verdi_npi" else "source_semantics"),
         })
     for group in groups:
         group["selected_categories"] = selected.get(group["backend"], [])
