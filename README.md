@@ -286,7 +286,66 @@ File parsing and EDA queries run locally or on configured LSF nodes. Returned ev
 | Complete environment configuration and advanced settings | [Configuration reference](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#client-configuration-reference) |
 | Reporting a problem or suggesting a feature | [GitHub Issues](https://github.com/gokeshenzhen/TraceWeave/issues) |
 
-Before contributing, read [AGENTS.md](https://github.com/gokeshenzhen/TraceWeave/blob/main/AGENTS.md). With test dependencies installed, run `python3.11 -m pytest` from the repository root.
+Before contributing, read [AGENTS.md](AGENTS.md). Repository regression profiles
+require the `test`, `source-graph` and `fst` Python extras, plus a C++ compiler
+(`g++`). For a new development environment, install the declared extras with
+`python3.11 -m pip install -e ".[test,source-graph,fst]"`. The test runner never
+installs dependencies or changes shell, MCP, license or scheduler configuration.
+
+| Command from the repository root | Required coverage |
+|---|---|
+| `python3.11 -m pytest` | Portable unit/mock, VCD/log and open source frontend/FST tests |
+| `python3.11 scripts/run_tests.py --profile portable` | The same portable coverage, with JSON/JUnit and logs |
+| `python3.11 scripts/run_tests.py --profile eda` | Portable plus real FSDB, VCS and NPI functionality; excludes five scale tests |
+| `python3.11 scripts/run_tests.py --profile stress` | The five original 10M waveform tests |
+| `python3.11 scripts/run_tests.py --profile all` | Full self-contained regression: portable + EDA + all five scale tests |
+
+Plain pytest selects portable coverage even on a machine with commercial SDKs;
+it does not enable licensed tests. EDA/all require configured VCS on `PATH`,
+`VERDI_HOME` with FSDB Reader/Writer and NPI SDKs, a working compiler/linker and
+available licenses. Stress uses the reader, writer and `vcd2fsdb` from Verdi; it
+does not require VCS, NPI, Slang or FST. Tests generate only synthetic designs in
+owned directories; private project paths and prebuilt author KDBs are unnecessary.
+No profile submits live LSF jobs. Standalone worker tests are local coverage.
+
+`--check` checks software/tool presence without license checkout. `--list` collects
+a selection plan without building fixtures. Selected missing dependencies,
+preparation failures, assertion failures, unexpected skips and unexecuted required
+tests return nonzero. Module-level collection skips are also reported. Planned
+exclusions and a few explicitly listed platform limitations remain separate from
+passes. Arguments after `--` select a partial run, for example
+`-- tests/test_log_parser.py -q`; its report does not qualify the complete profile.
+
+Use `--cache-dir /absolute/path/to/test-cache` to reuse generated inputs. Each
+entry validates source/tool fingerprints, artifact hashes and ABI before reuse;
+failed or cancelled builds never publish a complete manifest. A nonempty cache
+must carry the TraceWeave ownership marker. Existing repository wrappers and
+external input files are preserved. Supported waveform path overrides
+(`TW_POINT_READ_FSDB`, `TW_LAZY_LARGE_FSDB`, `TW_SESSION_RECLAIM_FSDB` and the three
+`TW_P2B_*_FSDB` paths) are read-only and must satisfy the selected fixture oracle.
+Missing or mismatched overrides fail rather than selecting another input.
+
+The shared 10M fixture contains four signals, 10,000,001 data records and
+5,000,000 clock rising edges, with real flush sessions. Generation writes about
+500 MB of temporary VCD and removes it after successful conversion/validation;
+the cache retains the FSDB. Reports include actual disk size, session layout,
+record counts, timings and RSS measurements. This profile does not run the
+separate 100M benchmark suite.
+
+`--output /absolute/path/to/new-results` retains `report.json`, `pytest.json`,
+JUnit, raw pytest output, test temporary files and fixture manifest/build-log
+snapshots. The output directory must be new. Without these options, the runner
+prints its temporary evidence and fixture paths; it preserves them for inspection.
+Remove only your own result/cache directories when finished.
+
+External UART/OpenTitan acceptance is separately opt-in with
+`--external-representative /path/to/manifest.json`. Copy the format in
+[representative.json](tests/fixtures/six_tool_hierarchy/representative.json), supply
+an explicit project revision, top/scope/source locations and SHA-256 identities
+for the compile log, definition and instance-site files. This specialized check
+expects preserved blocking diagnostics/partial coverage; default profiles instead
+exercise self-contained complete and incomplete hierarchies. Neither a default
+all pass nor a local worker pass claims external-project or live-scheduler coverage.
 
 TraceWeave is available under the [MIT License](https://github.com/gokeshenzhen/TraceWeave/blob/main/LICENSE).
 

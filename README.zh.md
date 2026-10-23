@@ -273,7 +273,52 @@ explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
 | 完整环境配置与高级选项 | [配置参考](docs/architecture.md#client-configuration-reference) |
 | 报告问题或提出建议 | [GitHub Issues](https://github.com/gokeshenzhen/TraceWeave/issues) |
 
-参与开发前请阅读 [AGENTS.md](AGENTS.md)。在准备好测试依赖的环境中，可于仓库根目录运行 `python3.11 -m pytest`。
+参与开发前请阅读 [AGENTS.md](AGENTS.md)。仓库回归需要 `test`、`source-graph`、
+`fst` Python extras 和 `g++`。新开发环境可使用
+`python3.11 -m pip install -e ".[test,source-graph,fst]"` 安装声明的依赖。
+测试入口不会安装依赖，也不修改 shell、MCP、许可证或调度配置。
+
+| 仓库根目录命令 | 必需覆盖范围 |
+|---|---|
+| `python3.11 -m pytest` | 基础单元/mock、VCD/日志、开源 Slang/FST 功能 |
+| `python3.11 scripts/run_tests.py --profile portable` | 同一基础范围，另保存 JSON/JUnit 和日志 |
+| `python3.11 scripts/run_tests.py --profile eda` | 功能回归：基础＋真实 FSDB/VCS/NPI，不含五项规模测试 |
+| `python3.11 scripts/run_tests.py --profile stress` | 原有五项千万步波形测试 |
+| `python3.11 scripts/run_tests.py --profile all` | 全量回归：基础＋EDA 功能＋五项原规模测试 |
+
+裸 pytest 即使发现商业 SDK，也只选择基础范围，不启用商业许可测试。
+eda/all 要求 `PATH` 上已有 VCS、`VERDI_HOME` 下有 FSDB Reader/Writer、NPI SDK，
+编译链接环境及许可可用。stress 使用 Verdi reader、writer 和 `vcd2fsdb`，
+不要求 VCS、NPI、Slang 或 FST。输入由公开小例在测试拥有的目录中自动生成，
+无需作者私有工程、波形或预编译 KDB。所有 profile 均不提交真实 LSF 作业；
+standalone worker 测试仅表示本地覆盖。
+
+`--check` 只检查软件和工具是否存在，不 checkout license；`--list` 只收集选择计划，
+不生成输入。选中的依赖缺失、准备失败、断言失败、意外 skip 或必需测试未执行时，
+入口均非零退出；模块收集阶段的 skip 也会报告。计划排除和少量逐项声明的平台限制
+与通过数分开。`--` 后可附加 pytest 参数，例如 `-- tests/test_log_parser.py -q`，
+报告将标为部分选择，不能据此宣称整个 profile 通过。
+
+使用 `--cache-dir /绝对路径/test-cache` 复用生成输入。缓存按源码/工具指纹、产物
+hash 和 ABI 校验；失败或取消不发布完整 manifest。非空缓存目录必须带有 TraceWeave
+所有权标记。现有仓库 wrapper 和外部输入不会被覆盖。保留的只读波形覆盖变量为
+`TW_POINT_READ_FSDB`、`TW_LAZY_LARGE_FSDB`、`TW_SESSION_RECLAIM_FSDB` 和三个
+`TW_P2B_*_FSDB`；缺文件或不匹配所选 fixture 的 oracle 时失败，不改用其他文件。
+
+五项 stress 共享四信号波形，真实包含 10,000,001 条数据记录、5,000,000 个时钟
+上升沿和物理 flush session。生成时写入约 500 MB 临时 VCD，转换及校验成功后删除
+VCD，缓存保留 FSDB。报告记录实际磁盘大小、session 布局、事件数、耗时和 RSS。
+此 profile 不执行独立的 100M benchmark。
+
+`--output /绝对路径/new-results` 保存 `report.json`、`pytest.json`、JUnit、原始
+pytest 日志、测试临时文件及 fixture manifest/构建日志快照。结果目录必须尚不存在。
+未指定时会打印临时证据和 fixture 目录并保留供复核；完成后仅清理自己拥有的目录。
+
+外部 UART/OpenTitan 验收另用 `--external-representative /路径/manifest.json`
+显式选择。按 [representative.json](tests/fixtures/six_tool_hierarchy/representative.json)
+填写项目 revision、top/scope、定义/实例位置及 compile log、定义文件、实例文件的
+SHA-256。该专项要求保留真实阻断诊断和 partial 覆盖；默认回归改用自包含的健康及
+不完整层级。默认 all 或本地 worker 通过均不代表外部工程或真实调度器通过。
 
 TraceWeave 使用 [MIT License](LICENSE)。
 
