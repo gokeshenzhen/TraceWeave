@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import time
+from collections import Counter
 
 import pytest
 from scripts.test_profiles import PROFILES, allowed_skip, membership
@@ -23,12 +24,27 @@ def pytest_configure(config):
     config._tw_started = time.monotonic()
     config._tw_report = {'profile': config.getoption('--tw-profile'),
                          'selected': [], 'excluded': [], 'outcomes': [],
+                         'excluded_modules': [], 'phase_times_sec': {},
                          'collection_issues': [], 'expected_skips': [], 'unexpected_skips': []}
     for name in ('TRACEWEAVE_RUN_EDA_INTEGRATION', 'TRACEWEAVE_TEST_NPI_DYNAMIC',
                  'TRACEWEAVE_TEST_EXPRESSION_ORACLE'):
         os.environ[name] = '1' if config.getoption('--tw-profile') in ('eda', 'all') else '0'
 
 
+def pytest_ignore_collect(collection_path, config):
+    if config.getoption('--tw-profile') != 'stress' or not collection_path.name.startswith('test_'):
+        return None
+    from scripts.test_profiles import CATALOG
+    names = {Path(k.split('::')[0]).name for k, v in CATALOG.items() if v == 'stress'}
+    if config.getoption('--tw-external-representative'):
+        names.add('test_slang_hierarchy_representative.py')
+    if collection_path.suffix == '.py' and collection_path.name not in names:
+        config._tw_report['excluded_modules'].append(str(collection_path))
+        return True
+    return None
+
+
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     selected, excluded, layers = [], [], {}
     profile = config.getoption('--tw-profile')
@@ -42,11 +58,20 @@ def pytest_collection_modifyitems(config, items):
             config._tw_report['selected'].append(entry)
         else:
             excluded.append(item)
-            config._tw_report['excluded'].append(entry)
     # Run the three layers serially, each node exactly once.
     selected.sort(key=lambda item: ('portable', 'eda', 'stress', 'external').index(layers[item.nodeid]))
     items[:] = selected
     config.hook.pytest_deselected(items=excluded)
+
+
+def pytest_deselected(items):
+    if _active is None:
+        return
+    for item in items:
+        layer = membership(item.nodeid, fixtures=item.fixturenames,
+                           eda_marker=item.get_closest_marker('eda_integration') is not None)
+        _active._tw_report['excluded'].append(dict(nodeid=item.nodeid, layer=layer,
+            reason='pytest_filter' if layer in PROFILES[_active.getoption('--tw-profile')] else 'outside_profile'))
 
 
 def pytest_collectreport(report):
@@ -70,22 +95,27 @@ def pytest_collection_finish(session):
         return
     from scripts.test_fixtures import prepare_for_tests
     try:
+        start = time.monotonic()
         config._tw_report['fixtures'] = prepare_for_tests(
             config._tw_report['selected'], config.getoption('--tw-cache-dir'))
     except Exception as exc:
         config._tw_report['preparation_error'] = str(exc)
         raise pytest.UsageError('fixture preparation failed: ' + str(exc)) from exc
+    finally:
+        config._tw_report['fixture_preparation_sec'] = time.monotonic()-start
 
 
 def pytest_runtest_logreport(report):
     if _active is None:
         return
     result = _active._tw_report
+    times = result['phase_times_sec']
+    times[report.when] = times.get(report.when, 0) + report.duration
     if report.when == 'call' or report.failed or report.skipped:
         result['outcomes'].append({'nodeid': report.nodeid, 'when': report.when,
                                    'outcome': report.outcome, 'duration_sec': report.duration})
     if report.skipped:
-        reason = str(report.longrepr[2]).removeprefix('Skipped: ')
+        reason = str(report.longrepr[2] if isinstance(report.longrepr, tuple) else report.longrepr).removeprefix('Skipped: ')
         key = 'expected_skips' if allowed_skip(report.nodeid, reason) else 'unexpected_skips'
         result[key].append({'nodeid': report.nodeid, 'reason': reason})
 
@@ -95,7 +125,17 @@ def pytest_sessionfinish(session, exitstatus):
     config = session.config
     result = config._tw_report
     planning = config.option.collectonly or config.getoption('--tw-plan-only')
-    incomplete = (not result['selected'] or result['unexpected_skips'] or result['collection_issues'])
+    executed = {r['nodeid'] for r in result['outcomes'] if r['when'] == 'call'}
+    expected = {r['nodeid'] for r in result['expected_skips']}
+    result['unexecuted'] = sorted(r['nodeid'] for r in result['selected'] if r['nodeid'] not in executed | expected)
+    result['summary'] = dict(selected=len(result['selected']), excluded=len(result['excluded']),
+        executed=len(executed), expected_skips=len(expected), unexpected_skips=len(result['unexpected_skips']),
+        collection_issues=len(result['collection_issues']),
+        call_outcomes=dict(Counter(r['outcome'] for r in result['outcomes'] if r['when'] == 'call')))
+    result['layers'] = {layer: dict(selected=sum(r['layer'] == layer for r in result['selected']),
+        executed=sum(r['layer'] == layer and r['nodeid'] in executed for r in result['selected']))
+        for layer in ('portable', 'eda', 'stress', 'external')}
+    incomplete = (not result['selected'] or result['unexecuted'] or result['unexpected_skips'] or result['collection_issues'])
     if incomplete and not planning and exitstatus == 0:
         session.exitstatus = 1
     result.update(status='planned' if planning else 'passed' if session.exitstatus == 0 else 'incomplete',

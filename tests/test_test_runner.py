@@ -65,3 +65,27 @@ def test_profile_without_explicit_test_paths_collects_original_stress_set(tmp_pa
     plan = json.loads((output/'pytest.json').read_text())
     assert len(plan['selected']) == 5
     assert {r['layer'] for r in plan['selected']} == {'stress'}
+
+
+def test_setup_only_is_incomplete_even_if_pytest_exits_zero(tmp_path):
+    test = tmp_path/'test_selected.py'; test.write_text('def test_required(): pass\n')
+    output = tmp_path/'run'
+    result = subprocess.run([sys.executable, str(ROOT/'scripts/run_tests.py'), '--output', str(output),
+        '--', str(test), '--setup-only'], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    report = json.loads((output/'report.json').read_text())
+    assert len(report['pytest']['unexecuted']) == 1
+    assert report['pytest']['summary']['executed'] == 0
+
+
+def test_keyword_subset_reports_only_executed_selection(tmp_path):
+    test = tmp_path/'test_filtered.py'
+    test.write_text('def test_wanted(): pass\ndef test_excluded(): assert False\n')
+    output = tmp_path/'run'
+    result = subprocess.run([sys.executable, str(ROOT/'scripts/run_tests.py'), '--output', str(output),
+        '--', str(test), '-k', 'wanted'], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout+result.stderr
+    report = json.loads((output/'report.json').read_text())
+    assert report['status'] == 'passed_selection'
+    assert report['pytest']['summary']['executed'] == 1
+    assert report['pytest']['excluded'][0]['reason'] == 'pytest_filter'

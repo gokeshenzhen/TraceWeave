@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,12 @@ def run(command, directory, *, timeout=120, env=None, label='build'):
         output.write(json.dumps(command) + '\n'); output.flush()
         proc = subprocess.Popen(command, cwd=directory, env=env, stdout=output,
                                 stderr=subprocess.STDOUT, start_new_session=True)
+        previous = None
+        if threading.current_thread() is threading.main_thread():
+            previous = signal.getsignal(signal.SIGTERM)
+            def interrupted(signum, frame):
+                raise KeyboardInterrupt('fixture preparation terminated')
+            signal.signal(signal.SIGTERM, interrupted)
         try:
             code = proc.wait(timeout=timeout)
             if code:
@@ -57,6 +64,9 @@ def run(command, directory, *, timeout=120, env=None, label='build'):
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL); proc.wait()
             raise
+        finally:
+            if previous is not None:
+                signal.signal(signal.SIGTERM, previous)
     return dict(command=command, elapsed_sec=time.monotonic()-start,
                 children_peak_rss_kib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
                 rss_measurement='process cumulative child high water mark')
@@ -69,17 +79,18 @@ class FixtureCache:
             raise ValueError('fixture cache root must not be a symlink')
         self.root.mkdir(parents=True, exist_ok=True)
         marker = self.root / '.traceweave-fixtures'
-        if not marker.exists():
-            if any(self.root.iterdir()):
-                raise ValueError('refusing nonempty cache without TraceWeave ownership marker')
-            # Competing first consumers may both observe an empty directory.
-            try:
+        cache_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(cache_fd, fcntl.LOCK_EX)
+            if not marker.exists():
+                if any(self.root.iterdir()):
+                    raise ValueError('refusing nonempty cache without TraceWeave ownership marker')
                 with marker.open('x') as f:
                     f.write(OWNER)
-            except FileExistsError:
-                pass
-        if marker.read_text() != OWNER:
-            raise ValueError('invalid fixture cache owner')
+            if marker.read_text() != OWNER:
+                raise ValueError('invalid fixture cache owner')
+        finally:
+            os.close(cache_fd)
         self.receipts = []
 
     def get(self, name, inputs, build, validate=lambda path, meta: None):

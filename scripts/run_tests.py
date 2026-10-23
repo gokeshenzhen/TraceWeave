@@ -6,6 +6,9 @@ import argparse
 import json
 import os
 from pathlib import Path
+import resource
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -13,7 +16,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from scripts.test_profiles import PROFILES, prerequisites
+from scripts.test_profiles import PROFILES, prerequisites, versions
 
 
 def main(argv=None):
@@ -35,6 +38,7 @@ def main(argv=None):
     if args.output:
         output.mkdir(parents=True, exist_ok=False)
     report = {'profile': args.profile, 'command': sys.argv, 'missing': missing,
+              'versions': versions(),
               'layers': sorted(PROFILES[args.profile]), 'external_projects': str(args.external_representative) if args.external_representative else 'not_requested',
               'live_lsf_scheduler': 'not_requested', 'status': 'incomplete'}
     for name, command in [('head', ['git', 'rev-parse', 'HEAD']),
@@ -49,7 +53,8 @@ def main(argv=None):
         else:
             command = [sys.executable, '-m', 'pytest', '-p', 'scripts.pytest_profiles',
                        '-c', str(ROOT / 'pytest.ini'), '--tw-profile', args.profile,
-                       '--tw-report', str(output / 'pytest.json'), '--junitxml', str(output / 'junit.xml')]
+                       '--tw-report', str(output / 'pytest.json'), '--junitxml', str(output / 'junit.xml'),
+                       '--basetemp', str(output / 'tmp')]
             if args.list:
                 command += ['--collect-only', '-q']
             if args.cache_dir:
@@ -68,25 +73,38 @@ def main(argv=None):
             env = dict(os.environ, TRACEWEAVE_TELEMETRY='0', TRACEWEAVE_NPI_EXECUTION='local')
             with (output / 'pytest.log').open('w') as log:
                 process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
-                                           stderr=subprocess.STDOUT, text=True)
+                                           stderr=subprocess.STDOUT, text=True, start_new_session=True)
                 try:
                     for line in process.stdout:
                         print(line, end='', flush=True)
                         log.write(line)
                     code = process.wait()
                 except BaseException:
-                    process.terminate()
+                    os.killpg(process.pid, signal.SIGTERM)
                     try:
                         process.wait(timeout=10)
                     except subprocess.TimeoutExpired:
-                        process.kill(); process.wait()
+                        os.killpg(process.pid, signal.SIGKILL); process.wait()
                     raise
             result_path = output / 'pytest.json'
             if result_path.is_file():
                 result = json.loads(result_path.read_text())
                 report['pytest'] = result
-                if not args.list and (not result['selected'] or result['collection_issues'] or result['unexpected_skips']):
+                if not args.list and (not result['selected'] or result['status'] != 'passed'):
                     code = code or 1
+                if result.get('preparation_error'):
+                    report['failure_phase'] = 'fixtures'
+                snapshots = output/'fixtures'
+                snapshots.mkdir(exist_ok=True)
+                for receipt in result.get('fixtures', []):
+                    source = Path(receipt['manifest'])
+                    target = snapshots/(receipt['name']+'-'+receipt['key'][:24])
+                    if target.exists():
+                        continue
+                    target.mkdir()
+                    shutil.copyfile(source, target/'manifest.json')
+                    for log in source.parent.glob('*.log'):
+                        shutil.copyfile(log, target/log.name)
             elif code == 0:
                 code = 1
                 report['failure_phase'] = 'missing_pytest_report'
@@ -96,7 +114,9 @@ def main(argv=None):
         report.update(failure_phase='runner', error=str(exc))
         code = 2
     finally:
-        report.update(exit_code=code, duration_sec=time.monotonic()-start)
+        report.update(exit_code=code, duration_sec=time.monotonic()-start,
+                      children_peak_rss_kib=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
+                      rss_measurement='maximum child high water mark; not sum of concurrent RSS')
         (output / 'report.json').write_text(json.dumps(report, indent=2)+'\n')
         print(f"TraceWeave {args.profile}: {report['status']}; evidence: {output}")
     return code

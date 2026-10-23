@@ -6,6 +6,7 @@ whether an SDK or a private waveform happens to exist on this machine.
 from __future__ import annotations
 
 import importlib.util
+from importlib import metadata
 import json
 import os
 from pathlib import Path
@@ -47,6 +48,10 @@ def prerequisites(profile):
     for module in modules:
         if importlib.util.find_spec(module) is None:
             missing.append('python:' + module)
+        elif module in ('pyslang', 'pylibfst'):
+            required = {'pyslang': '11.0.0', 'pylibfst': '0.2.1'}[module]
+            if metadata.version(module) != required:
+                missing.append('python:'+module+'=='+required)
     if not shutil.which('g++'):
         missing.append('tool:g++')
     if profile != 'portable':
@@ -66,7 +71,23 @@ def prerequisites(profile):
 def allowed_skip(nodeid, reason):
     # Narrow platform limitations; never exempt SDK, software or fixture errors.
     rules = {
-        'tests/test_fst_boundaries.py::test_unreadable_file': 'root can read mode-000 files',
-        'tests/test_fsdb_optimization_bench.py::test_affinity': 'requires two permitted logical CPUs',
+        'tests/test_fst_boundaries.py::test_permission_failure_is_distinct_from_corrupt_data': 'root can read mode-000 files',
+        'tests/test_fsdb_optimization_bench.py::test_suite_affinity_is_inherited_by_worker_and_restored_on_failure': 'requires two permitted logical CPUs',
+        'tests/test_fsdb_optimization_bench.py::test_guard_disables_thp_in_exec_child_without_changing_parent': 'requires Linux THP status reporting',
+        'tests/test_worker_rss.py::test_exec_child_excludes_real_parent_high_water_mark': 'requires Linux /proc address-space high water marks',
+        'tests/test_source_graph_session_runtime.py::test_real_released_peak_still_triggers_reported_session_limit[asyncio]': 'requires Linux address-space RSS observations',
     }
     return rules.get(nodeid) == reason
+
+
+def versions():
+    packages = {}
+    for name in ('pytest', 'mcp', 'pydantic', 'PyYAML', 'pyslang', 'pylibfst'):
+        try:
+            packages[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            packages[name] = None
+    return dict(python=__import__('sys').version, packages=packages,
+        tools={name: shutil.which(name) for name in ('g++', 'vcs', 'bsub')},
+        installations={name: os.environ.get(name) for name in ('VERDI_HOME', 'VCS_HOME')},
+        license_checked=False)

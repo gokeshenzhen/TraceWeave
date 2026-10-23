@@ -75,3 +75,41 @@ def test_missing_override_fails_without_generating(tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError):
         cache.wave('TW_POINT_READ_FSDB', lambda: pytest.fail('must not fall back'))
     assert not list(cache.root.rglob('manifest.json'))
+
+
+def test_concurrent_first_cache_users_share_owner_and_build(tmp_path):
+    calls = []
+    def consume(_):
+        cache = FixtureCache(tmp_path/'cache')
+        def build(path):
+            calls.append(1); (path/'data').write_text('complete'); return {}
+        return cache.get('shared', {}, build)
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(consume, range(4)))
+    assert len(calls) == 1 and len(set(results)) == 1
+
+
+def test_termination_stops_owned_generator_without_publishing(tmp_path):
+    import os
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    child = 'import os,time,pathlib; pathlib.Path("child.pid").write_text(str(os.getpid())); time.sleep(30)'
+    program = ('from scripts.test_fixtures import FixtureCache,run; import sys; '
+               f'cache=FixtureCache({str(tmp_path/"cache")!r}); '
+               f'cache.get("cancel", {{}}, lambda p: run([sys.executable,"-c",{child!r}],p))')
+    proc = subprocess.Popen([sys.executable, '-c', program], cwd=root,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic()+5
+        while time.monotonic() < deadline and not list(tmp_path.rglob('child.pid')):
+            time.sleep(.01)
+        pidfile, = tmp_path.rglob('child.pid')
+        child_pid = int(pidfile.read_text())
+        proc.terminate(); proc.wait(timeout=10)
+        assert proc.returncode != 0
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+        assert not list(tmp_path.rglob('manifest.json'))
+    finally:
+        if proc.poll() is None:
+            proc.kill(); proc.wait()
