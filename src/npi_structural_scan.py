@@ -19,8 +19,8 @@ from .structural_gap_diagnostics import GapDiagnostics
 from .structural_scan_continuation import initial_state, validate_state, new_job, MAX_FRONTIER_BYTES, MAX_PENDING, MAX_CUMULATIVE
 from .structural_native_values import BITWISE, REDUCTIONS, operate, vector, value as abstract_value
 
-CAPABILITY_VERSION = "npi_input_ports_v5"
-_DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar", "npiStructVar", "npiStructNet", "npiPackedArrayVar", "npiPackedArrayNet"}
+CAPABILITY_VERSION = "npi_input_ports_v6"
+_DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar", "npiStructVar", "npiStructNet", "npiPackedArrayVar", "npiPackedArrayNet", "npiEnumVar", "npiEnumNet"}
 _CONSTANTS = {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst', 'npiPackedArrayParameter'}
 _SELECTS = {'npiBitSelect', 'npiRegBit', 'npiNetBit', 'npiParameterBit', 'npiPartSelect'}
 _SCOPES = {"npiModule", "npiInterface", "npiProgram", "npiGenScope"}
@@ -102,11 +102,22 @@ def scan_native_ports(provider, options, *, state=None):
         if ts is None:
             raise _UnsupportedPort('npi_selection_range_unavailable')
         kind = p.scalar(ts, 'type')
+        for _ in range(64):
+            if kind != 'npiEnumTypespec':
+                break
+            ts = p.one(ts, 'base_typespec_handle')
+            if ts is None:
+                raise _UnsupportedPort('npi_selection_range_unavailable')
+            kind = p.scalar(ts, 'type')
+        else:
+            raise HierarchyBudgetExceeded('native_expression_depth_limit')
         # The installed SDK exposes packed dimensions under the typespec, not
         # LeftRange/RightRange directly on a Reg/Parameter. Reject aggregate and
         # multidimensional types rather than guessing their flattened order.
         if kind in {'npiIntTypespec', 'npiIntegerTypespec'} and size == 32:
             return 31, 0, 1
+        if kind == 'npiStructTypespec' and p.scalar(ts, 'packed') == 1:
+            return size - 1, 0, 1
         if kind not in {'npiLogicTypespec', 'npiBitTypespec', 'npiPackedArrayTypespec'}:
             raise _UnsupportedPort('npi_selection_range_unavailable')
         it = _LanguageIterator(p, p.low.Range, ts)
@@ -131,10 +142,13 @@ def scan_native_ports(provider, options, *, state=None):
         parent_size, rows, complete = parts(parent, depth + 1)
         decl_left, decl_right, stride = packed_range(parent, parent_size, depth)
         if kind == 'npiPartSelect':
-            size = width(handle)
             left = index_value(p.one(handle, 'left_range_handle'), depth)
             right = index_value(p.one(handle, 'right_range_handle'), depth)
-            if ((abs(left - right) + 1) * stride != size
+            size = (abs(left - right) + 1) * stride
+            if size > options['limits']['max_width']:
+                raise _UnsupportedPort('native_width_limit')
+            observed = p.scalar(handle, 'size')
+            if ((type(observed) is int and observed > 0 and observed != size)
                     or left != right and (left > right) != (decl_left > decl_right)):
                 raise _UnsupportedPort('npi_selection_range_unavailable')
         else:
@@ -161,6 +175,7 @@ def scan_native_ports(provider, options, *, state=None):
                     # evaluation, proves the selected declared bit.
                     matches = []
                     if (stride == 1 and parent_size <= 256
+                            and (parent_kind in _DYNAMIC or p.scalar(handle, 'constant_select') == 1)
                             and callable(getattr(p.low, 'handle_by_index', None))
                             and callable(getattr(p.low, 'compare_objects', None))):
                         for index in range(min(decl_left, decl_right), max(decl_left, decl_right) + 1):
@@ -219,7 +234,7 @@ def scan_native_ports(provider, options, *, state=None):
                 # A sized cast retains the data operand's signedness; SDK
                 # metadata can instead describe its width-expression operand.
                 data = args[1:] if op in {'npiExprCastOp', 'npiConditionOp'} else args
-                return int(all(signedness(a, depth + 1) for a in data))
+                return common_signedness(data, depth + 1)
             finally:
                 p.close_iterator(it)
         signed = p.scalar(handle, 'signed')
@@ -230,6 +245,58 @@ def scan_native_ports(provider, options, *, state=None):
         if signed not in (0, 1):
             raise _UnsupportedPort('npi_signedness_unavailable', expression_kind=kind)
         return signed
+
+    def common_signedness(handles, depth=0):
+        failure = None
+        for h in handles:
+            try:
+                if signedness(h, depth) == 0:
+                    return 0
+            except _UnsupportedPort as exc:
+                failure = exc
+        if failure is not None:
+            raise failure
+        return 1
+
+    def check_parameter_selection(handle, depth=0):
+        if depth > 64:
+            raise HierarchyBudgetExceeded('native_expression_depth_limit')
+        parent = p.one(handle, 'parent_handle')
+        if parent is None:
+            return
+        kind = p.scalar(parent, 'type')
+        if kind in {'npiArrayParameter', 'npiPackedArrayParameter'}:
+            # The SDK can return the first element's value for a dynamic
+            # parameter-array selection. Type=Parameter is not constant proof
+            # until the exact selection is verified independently of value().
+            ts = p.one(parent, 'typespec_handle')
+            it = _LanguageIterator(p, p.low.Range, ts) if ts is not None else None
+            try:
+                r = it.read() if it is not None else None
+                if r is None or it.read() is not None:
+                    raise _UnsupportedPort('npi_constant_selection_unverified')
+                left = index_value(p.one(r, 'left_range_handle'), depth)
+                right = index_value(p.one(r, 'right_range_handle'), depth)
+            finally:
+                if it is not None:
+                    p.close_iterator(it)
+            index = p.one(handle, 'index_handle')
+            if index is not None:
+                try:
+                    selected = index_value(index, depth)
+                except _UnsupportedPort:
+                    raise _UnsupportedPort('npi_constant_selection_unverified') from None
+            else:
+                path, parent_path = p.scalar(handle, 'full_name'), p.scalar(parent, 'full_name')
+                suffix = path[len(parent_path):] if (isinstance(path, str)
+                    and isinstance(parent_path, str) and parent_path and path.startswith(parent_path)) else ''
+                if len(suffix) > 32 or not re.fullmatch(r'\[-?(?:0|[1-9][0-9]*)\]', suffix):
+                    raise _UnsupportedPort('npi_constant_selection_unverified')
+                selected = int(suffix[1:-1])
+            if not min(left, right) <= selected <= max(left, right):
+                raise _UnsupportedPort('npi_constant_selection_unverified')
+        if kind in {'npiParameter', 'npiPackedArrayParameter'}:
+            check_parameter_selection(parent, depth + 1)
 
     def resize(handle, data, target, common_signed=None):
         size, rows, _ = data
@@ -253,11 +320,11 @@ def scan_native_ports(provider, options, *, state=None):
         # one-bit unsigned literal. Their context extension differs. Keep that
         # case unresolved; '0 and 1'b0 have identical extension semantics.
         if (size == 1 and signed == 0 and kind == 'npiConstant'
-                and bits != '0'):
+                and bits != '0' and p.scalar(resolved, 'signed') != 1):
             raise _UnsupportedPort('npi_contextual_width_conversion_unverified', actual_width=size, port_width=target)
         return abstract_value((bits[0] if signed else '0') * (target-size) + bits)
 
-    def operation(handle, depth):
+    def operation(handle, depth, context=None):
         op = p.scalar(handle, 'op_type')
         it = _LanguageIterator(p, p.low.Operand, handle)
         handles = []
@@ -272,6 +339,32 @@ def scan_native_ports(provider, options, *, state=None):
         finally:
             p.close_iterator(it)
         operands = [parts(item, depth + 1) for item in handles]
+        if op == 'npiAssignmentPatternOp' and len(handles) == 1 and context is not None:
+            formal = p.one(context, 'low_conn_handle')
+            ts = p.one(formal, 'typespec_handle') if formal is not None else None
+            if ts is not None and p.scalar(ts, 'type') in {'npiPackedArrayTypespec', 'npiArrayTypespec'}:
+                it = _LanguageIterator(p, p.low.Range, ts)
+                try:
+                    r = it.read()
+                    single = (r is not None and it.read() is None
+                        and index_value(p.one(r, 'left_range_handle'), depth)
+                        == index_value(p.one(r, 'right_range_handle'), depth))
+                finally:
+                    p.close_iterator(it)
+                elem = p.one(ts, 'elem_typespec_handle')
+                if (single and elem is not None and p.scalar(elem, 'type') == 'npiStructTypespec'
+                        and p.scalar(elem, 'packed') == 1 and operands[0][0] == width(context)):
+                    bits = vector(*operands[0][:2])
+                    if set(bits) & set('xz'):
+                        actual_type = p.one(handles[0], 'typespec_handle')
+                        if actual_type is None:
+                            raise _UnsupportedPort('npi_pattern_four_state_conversion_unverified')
+                        budget.call()
+                        same = p.low.compare_objects(actual_type.cps_obj, elem.cps_obj)
+                        budget.checkpoint()
+                        if same != 1:
+                            raise _UnsupportedPort('npi_pattern_four_state_conversion_unverified')
+                    return operands[0]
         if op == 'npiExprCastOp' and len(handles) == 2:
             size = index_value(handles[0], depth)
             if not 1 <= size <= options['limits']['max_width']:
@@ -308,9 +401,10 @@ def scan_native_ports(provider, options, *, state=None):
         aligned = list(operands)
         if op in BITWISE or op == 'npiConditionOp':
             positions = range(1, 3) if op == 'npiConditionOp' and len(handles) == 3 else range(len(handles))
-            common = int(all(signedness(handles[i]) for i in positions))
-            for i in positions:
-                aligned[i] = resize(handles[i], operands[i], size, common_signed=common)
+            if any(operands[i][0] != size for i in positions):
+                common = common_signedness([handles[i] for i in positions])
+                for i in positions:
+                    aligned[i] = resize(handles[i], operands[i], size, common_signed=common)
         bits = operate(op, [vector(w, rows) for w, rows, _ in aligned])
         if bits is not None:
             return abstract_value(bits)
@@ -322,7 +416,7 @@ def scan_native_ports(provider, options, *, state=None):
         gap('npi_expression_unmodeled', ['constant_connection'], expression_kind='npiOperation', operator=op)
         return size, [], False
 
-    def parts(handle, depth=0):
+    def parts(handle, depth=0, context=None):
         if depth > 64:
             raise HierarchyBudgetExceeded('native_expression_depth_limit')
         kind = p.scalar(handle, 'type')
@@ -333,13 +427,15 @@ def scan_native_ports(provider, options, *, state=None):
             actual = p.one(handle, 'actual_handle')
             if actual is None:
                 raise _UnsupportedPort('npi_reference_unresolved')
-            return parts(actual, depth + 1)
+            return parts(actual, depth + 1, context=context)
         if kind in _SELECTS:
             return selection(handle, kind, depth)
         if kind == 'npiOperation':
-            return operation(handle, depth)
+            return operation(handle, depth, context=context)
         size = width(handle)
         if kind in _CONSTANTS:
+            if kind != 'npiConstant':
+                check_parameter_selection(handle, depth)
             bits = binary(handle, size)
             if bits is None:
                 gap('npi_constant_value_unavailable', ['constant_connection'])
@@ -404,8 +500,8 @@ def scan_native_ports(provider, options, *, state=None):
         if 'constant_connection' not in categories:
             return
         try:
-            size, regions, _ = parts(actual)
             port_width = width(port)
+            size, regions, _ = parts(actual, context=port)
         except _UnsupportedPort as exc:
             gap(exc.reason, ['constant_connection'], **exc.details)
             return

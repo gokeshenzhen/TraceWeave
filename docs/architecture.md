@@ -2804,9 +2804,13 @@ a canonical decimal suffix of the exact native parent identity is accepted;
 the index must lie within the verified packed range. Symbolic package/genvar bit
 selections can instead use an exact native bit-identity comparison over at most
 256 declared bits. No match, ambiguous matches and missing SDK support remain
-gaps. Packed structure state remains dynamic; packed-array parameters use native
-constant values. Packed-array part selections account for element width rather
-than assuming one bit per index. Sized expression casts and concatenations can
+gaps. Packed structure and enum state remain dynamic; enum bit selections use
+the underlying integral type and packed structures have a flat integral range.
+Parameter-array elements require a proved constant, in-range index before using
+native values: the SDK can materialize one element even for a dynamic selection.
+Packed-array part selections account for element width rather
+than assuming one bit per index, and verified bounds can recover missing Size
+metadata. Sized expression casts and concatenations can
 derive widths from verified operands when the SDK returns Size=-1. Truncation
 and unambiguous signed/zero extension preserve constant regions; an unsigned
 one-bit nonzero/X/Z literal whose unbased-unsized origin is unavailable retains
@@ -2814,11 +2818,16 @@ a contextual-conversion gap. Variable indexes, out-of-range selections and
 unresolved or unsupported multidimensional types remain gaps. Procedural
 `For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
 `GenScope` instances are still visited. The native capability receipt is
-`npi_input_ports_v5`. Four-state transfer functions model bitwise operations,
+`npi_input_ports_v6`. Four-state transfer functions model bitwise operations,
 logical not/and/or, reductions, conditional merging and bounded replication.
 They preserve proven constant regions even with dynamic operands; internal
 dynamic unknowns are distinct from constant RTL X/Z. Common operand signedness
-is applied before bitwise/conditional width alignment. Unmodeled operations
+is applied before bitwise/conditional width alignment; equal-width operands do
+not require irrelevant signedness metadata. A one-element packed array of packed
+structures supports a one-operand assignment pattern only with verified formal
+range and width; X/Z additionally requires identical native element types.
+Unpacked or multi-element patterns without adequate metadata remain gaps.
+Unmodeled operations
 remain gaps; state initial values are never used as a substitute for modeling.
 `constant_regions.lsb_offset` counts from the port's least significant position;
 each region's `bits` is MSB first, matching Slang. Unverified width conversions,

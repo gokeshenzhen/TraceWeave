@@ -382,3 +382,70 @@ def test_replication_counts_are_bounded_before_allocation():
     expr.data['Operand'][0] = integer(100000)
     _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
     assert 'native_width_limit' in r['gaps'] and not r['facts']
+
+
+@pytest.mark.parametrize('kind', ['npiEnumVar', 'npiEnumNet'])
+def test_enum_state_values_never_become_constant_connections(kind):
+    live = Handle(type=kind, size=4, binary='1001')
+    _, r = run([port('a', live)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+
+
+def test_missing_part_size_is_derived_from_verified_bounds():
+    parent = packed('npiParameter', 7, 0, binary='10xz0101')
+    expr = part(parent, 5, 2); expr.data['size'] = -1
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == 'xz01'
+
+
+def test_packed_struct_bit_has_flat_integral_range():
+    live = Handle(type='npiStructVar', size=4, full_name='top.st', binary='1111',
+                  typespec_handle=Handle(type='npiStructTypespec', packed=1))
+    bit = Handle(type='npiRegBit', size=1, parent_handle=live, full_name='top.st[0]')
+    one = port('a', bit); one.data['size'] = 1
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+
+
+def test_equal_width_enum_branches_need_no_missing_signedness_metadata():
+    a, b = [Handle(type='npiEnumConst', size=4, signed=-1, binary=bits) for bits in ['1001', '0110']]
+    expr = Handle(type='npiOperation', op_type='npiConditionOp', size=4,
+                  Operand=[Handle(type='npiReg', size=1), a, b])
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+
+
+def test_dynamic_parameter_selection_cannot_use_sdk_materialized_element_value():
+    array = packed('npiArrayParameter', 1, 0, full_name='pkg.TABLE')
+    selected = Handle(type='npiParameter', size=4, binary='1111', parent_handle=array,
+                      full_name='pkg.TABLE[index]', index_handle=Handle(type='npiReg', size=1))
+    _, r = run([port('a', selected)], semantic_categories=['constant_connection'])
+    assert not r['facts'] and 'npi_constant_selection_unverified' in r['gaps']
+    selected.data['full_name'] = 'pkg.TABLE[1]'; selected.data['index_handle'] = integer(1)
+    _, r = run([port('a', selected)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '1111'
+
+
+def test_symbolic_constant_bit_needs_constant_index_proof_even_if_sdk_aliases_it():
+    parent = packed('npiParameter', 1, 0, full_name='pkg.P', binary='10')
+    bit = Handle(type='npiParameterBit', size=1, parent_handle=parent, full_name='pkg.P[index]')
+    parent.data['bits'] = {0: bit, 1: Handle()}
+    one = port('a', bit); one.data['size'] = 1
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert not r['facts'] and 'npi_selection_index_unavailable' in r['gaps']
+
+
+def test_one_element_array_pattern_uses_verified_formal_type():
+    elem = Handle(type='npiStructTypespec', packed=1)
+    array = Handle(type='npiPackedArrayTypespec', elem_typespec_handle=elem,
+        Range=[Handle(left_range_handle=integer(0), right_range_handle=integer(0))])
+    expr = Handle(type='npiOperation', op_type='npiAssignmentPatternOp', size=-1, Operand=[const('1010')])
+    one = port('a', expr); one.data['low_conn_handle'].data['typespec_handle'] = array
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '1010'
+    expr.data['Operand'][0] = const('xxzz')
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert not r['facts'] and 'npi_pattern_four_state_conversion_unverified' in r['gaps']
+    array.data['Range'][0].data['left_range_handle'] = integer(1)
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'partial'  # More than one element is not pass-through.
