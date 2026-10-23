@@ -1,6 +1,6 @@
 """
 test_fsdb_parser.py
-用真实 top_tb.fsdb 测试 FSDB 解析器
+使用自包含 parser_legacy.vcd 转换的真实 FSDB 测试解析器
 覆盖：信号搜索、时刻值查询、跳变列表、时间窗口查询
 """
 
@@ -11,24 +11,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 from src.fsdb_parser import FSDBParser
 
-REAL_FSDB = "/home/robin/Projects/mcp_demo/tb/work/work_my_case0/top_tb.fsdb"
-SIGNAL    = "top_tb.sva_top_inst.s_bits[2:0]"   # 已确认存在
+from pathlib import Path
 
-# 依赖具体信号 SIGNAL 的测试类，需要这个特定 FSDB 才能跑。
-_needs_real_fsdb = pytest.mark.skipif(
-    not os.path.exists(REAL_FSDB),
-    reason="真实 FSDB 文件不存在，跳过"
-)
-
-# 摘要/时长测试不依赖任何特定信号，可对任意 FSDB 验证；
-# 用 TW_SUMMARY_FSDB 覆盖即可在没有上面那个私有 FSDB 时也能跑。
-SUMMARY_FSDB = os.environ.get("TW_SUMMARY_FSDB", REAL_FSDB)
+SIGNAL = "top_tb.sva_top_inst.s_bits[2:0]"
+SUMMARY_FSDB = os.environ.get("TW_SUMMARY_FSDB", str(Path(__file__).parent / "fixtures/wide_bus.fsdb"))
 
 
 @pytest.fixture(scope="module")
 def parser():
     """module 级别共享，避免重复打开 FSDB"""
-    p = FSDBParser(REAL_FSDB)
+    p = FSDBParser(os.environ["TW_LEGACY_PARSER_FSDB"])
     yield p
     p.close()
 
@@ -37,7 +29,6 @@ def parser():
 # 信号搜索
 # ═══════════════════════════════════════════════════════════════════
 
-@_needs_real_fsdb
 class TestSearchSignals:
 
     def test_search_s_bits_found(self, parser):
@@ -76,7 +67,6 @@ class TestSearchSignals:
 # 时刻值查询
 # ═══════════════════════════════════════════════════════════════════
 
-@_needs_real_fsdb
 class TestGetValueAtTime:
 
     def test_value_at_310000ps(self, parser):
@@ -112,13 +102,16 @@ class TestGetValueAtTime:
 # 跳变列表查询
 # ═══════════════════════════════════════════════════════════════════
 
-@_needs_real_fsdb
 class TestGetTransitions:
 
     def test_transitions_in_range(self, parser):
         """0~500000ps 范围内应有 9 个跳变（已验证过）"""
         result = parser.get_transitions(SIGNAL, 0, 500000)
         assert result["transition_count"] == 9
+        assert [(r["time_ps"], r["value"]["bin"]) for r in result["transitions"]] == [
+            (0, "000"), (100000, "001"), (150000, "010"), (200000, "011"),
+            (230000, "100"), (270000, "101"), (300000, "000"),
+            (400000, "110"), (500000, "111")]
 
     def test_transitions_sorted_by_time(self, parser):
         result = parser.get_transitions(SIGNAL, 0, 500000)
@@ -145,16 +138,15 @@ class TestGetTransitions:
 
     def test_time_ns_conversion(self, parser):
         result = parser.get_transitions(SIGNAL, 230000, 230000)
-        if result["transitions"]:
-            t = result["transitions"][0]
-            assert t["time_ns"] == t["time_ps"] / 1000
+        assert result["transition_count"] == 1
+        t = result["transitions"][0]
+        assert t["time_ns"] == t["time_ps"] / 1000
 
 
 # ═══════════════════════════════════════════════════════════════════
 # 多信号时间窗口查询
 # ═══════════════════════════════════════════════════════════════════
 
-@_needs_real_fsdb
 class TestGetSignalsAroundTime:
 
     def test_center_value_correct(self, parser):
@@ -202,10 +194,6 @@ class TestGetSignalsAroundTime:
 # 波形摘要 / 仿真时长（端到端验证 native 全局时间 API）
 # ═══════════════════════════════════════════════════════════════════
 
-@pytest.mark.skipif(
-    not os.path.exists(SUMMARY_FSDB),
-    reason="没有可用 FSDB（设置 TW_SUMMARY_FSDB 指向任意 FSDB 即可运行）"
-)
 class TestGetSummary:
 
     @pytest.fixture(scope="class")

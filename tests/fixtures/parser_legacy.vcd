@@ -1,0 +1,25 @@
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module sva_top_inst $end
+$var wire 3 ! s_bits [2:0] $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+b000 !
+#100000
+b001 !
+#150000
+b010 !
+#200000
+b011 !
+#230000
+b100 !
+#270000
+b101 !
+#300000
+b000 !
+#400000
+b110 !
+#500000
+b111 !

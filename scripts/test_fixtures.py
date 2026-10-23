@@ -183,6 +183,13 @@ class FixtureCache:
                 parser.close()
         return self.get('same-tick', identity([__file__, converter], version=1), build, validate) / 'events.fsdb'
 
+    def legacy_parser(self):
+        converter = Path(os.environ['VERDI_HOME'])/'bin/vcd2fsdb'
+        source = ROOT/'tests/fixtures/parser_legacy.vcd'
+        def build(path):
+            return run([converter, source, '-seq_num', '-o', path/'parser.fsdb'], path, timeout=30)
+        return self.get('legacy-parser', identity([source, converter], version=1), build) / 'parser.fsdb'
+
 
 def prepare_for_tests(selected, cache_dir=None):
     """Prepare only selected capabilities; further input families are demand loaded."""
@@ -193,4 +200,6 @@ def prepare_for_tests(selected, cache_dir=None):
     os.environ['TW_COUNT_INDEX_WRAPPER'] = str(wrapper)
     from src import fsdb_parser
     fsdb_parser._WRAPPER_SO = str(wrapper)
+    if any('test_fsdb_parser.py::' in r['nodeid'] for r in selected):
+        os.environ['TW_LEGACY_PARSER_FSDB'] = str(cache.legacy_parser())
     return cache.receipts

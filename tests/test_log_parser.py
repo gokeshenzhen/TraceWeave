@@ -1058,19 +1058,18 @@ class TestProblemHintsUnknownValueDetection:
         assert hints["first_error_time_ps"] == 0
 
 
-REAL_LOG = "/home/robin/Projects/mcp_demo/tb/work/work_my_case0/run.log"
+REAL_LOG = os.path.join(os.path.dirname(__file__), "fixtures", "parser_errors.log")
 
 
-@pytest.mark.skipif(not os.path.exists(REAL_LOG), reason="真实 log 文件不存在，跳过")
 class TestRealLog:
     def setup_method(self):
         self.result = SimLogParser(REAL_LOG, "vcs").parse()
 
     def test_has_errors(self):
-        assert self.result["runtime_total_errors"] > 0
+        assert self.result["runtime_total_errors"] == 4
 
     def test_has_groups(self):
-        assert len(self.result["groups"]) > 0
+        assert len(self.result["groups"]) == 3
 
     def test_summary_fields_exist(self):
         for field in [

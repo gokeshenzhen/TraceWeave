@@ -1,0 +1,6 @@
+Chronologic VCS simulator synthetic regression
+UVM_INFO tb.sv(10) @ 0 ns: reporter [BOOT] starting deterministic test
+UVM_ERROR scoreboard.sv(31) @ 230 ns: uvm_test_top.env.scb [COMPARE] expected=0x4 actual=0x5
+UVM_ERROR scoreboard.sv(31) @ 250 ns: uvm_test_top.env.scb [COMPARE] expected=0x4 actual=0x6
+Error: checker.sv, 41: top_tb.sva_top_inst: at time 310 ns assertion failed s_bits expected=001 actual=000
+UVM_FATAL watchdog.sv(52) @ 500 ns: uvm_test_top.env [TIMEOUT] transaction timeout
