@@ -131,6 +131,10 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 默认流程先发现运行产物，并行准备设计上下文与扫描结构风险，再解析失败日志；失败运行有波形时继续扫描握手。助手复用设计上下文，按需浏览源码、追踪信号；需要完整层次时仍可显式构建。
 
+结构扫描默认开启（`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`）。如需在默认流程中跳过，
+在 MCP 服务环境中设置 `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`，然后重启或重新连接服务。
+仍可明确要求调用 `scan_structural_risks`；跳过代表未检查。握手扫描和单次扫描模式不受影响。
+
 也可以从具体问题开始：
 
 - **定位差异：**“比较这两份波形中的 `tb.dut.result`，分别追踪造成差异的数据与控制逻辑。”

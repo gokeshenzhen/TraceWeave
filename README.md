@@ -133,6 +133,12 @@ Connect your assistant and ask, replacing the path with your project directory:
 
 The default investigation discovers run artifacts, prepares a design context and scans structural risks in parallel, then parses failures and sweeps handshakes when a failed run has a waveform. The assistant uses that context to browse source and trace signals on demand. A full hierarchy build remains available when explicitly needed.
 
+Structural scanning is enabled by default (`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`).
+To skip it in the default workflow, set `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`
+in the MCP server environment and restart or reconnect the server. Explicit
+`scan_structural_risks` requests remain available; skipped checks remain unchecked.
+Handshake scanning and per-call scan modes are unchanged.
+
 Try a more focused question:
 
 - **Find a mismatch:** “Compare `tb.dut.result` in these two waveforms and trace the logic producing the difference on each side.”

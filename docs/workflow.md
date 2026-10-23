@@ -9,6 +9,11 @@ Reuse current cached steps when the snapshot confirms them. The sweep applies to
 failed runs with a waveform; standalone waveform queries need neither discovery
 nor a hierarchy build. Inspect the tool's current MCP schema for exact arguments.
 
+To omit structural scanning from this default flow, set
+`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0` in the MCP server environment and
+restart or reconnect. Explicit scan requests remain available; skipped checks
+remain unchecked, and the handshake-sweep requirement still applies.
+
 ### Reading driver evidence
 
 For Source Graph driver queries, a process may contain many assignment
@@ -123,6 +128,8 @@ Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?
 │
 ▼
 Step 2: scan_structural_risks(compile_log, simulator)
+│  Omit this step when TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0, unless the
+│  user explicitly requests structural scanning.
 │  Keep the same scan scope and coverage requirements. Pass the selected
 │  compile_log, ordered supplementary_compile_logs and top_hint to subsequent
 │  design queries. Native-first uses an existing KDB before full source work.

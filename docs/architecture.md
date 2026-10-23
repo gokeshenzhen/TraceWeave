@@ -2488,6 +2488,14 @@ describe bounded work, not an asserted speedup.
 
 ## Structural Scan Invocation
 
+The default workflow includes structural scanning. Set
+`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0` in the MCP server's startup environment
+and restart or reconnect to omit automatic scan and continuation guidance.
+Explicit tool calls remain available, and compatible cached evidence is retained.
+Without a cached scan, the diagnostic section reports `available=false`,
+`summary.status="skipped_by_policy"` and `summary.coverage_status="not_run"`;
+skipping never establishes a pass. Other workflow requirements are unchanged.
+
 `scan_structural_risks` selects its mode per invocation, not through an
 MCP client environment variable. Omitting `analysis_mode` is equivalent to:
 
