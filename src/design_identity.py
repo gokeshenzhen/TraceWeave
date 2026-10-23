@@ -24,6 +24,7 @@ from .sv_preprocessor import extract_preprocessor_options
 
 IDENTITY_VERSION = "1"
 _INCLUDE = re.compile(r'^\s*`include\s+([^\r\n]+)', re.MULTILINE)
+_INCLUDE_LOOKUP_MEMO_LIMIT = 4096
 
 
 def _digest(value: object) -> str:
@@ -72,7 +73,23 @@ class DesignIdentity:
             check_cancelled()
             if os.path.realpath(path) != record.path or not _content_current(record):
                 return False
-        return all(_resolve(name, dirs) == chosen for name, dirs, chosen in self.includes)
+        # Repeated directives may have the exact same ordered search path.
+        # Share only within this validation: a later call must observe new
+        # shadow candidates and changed aliases, including previously absent
+        # includes. Keep the expected choice check for every captured entry.
+        resolved = {}
+        for name, directories, chosen in self.includes:
+            check_cancelled()
+            key = (name, directories)
+            try:
+                actual = resolved[key]
+            except KeyError:
+                actual = _resolve(name, directories)
+                if len(resolved) < _INCLUDE_LOOKUP_MEMO_LIMIT:
+                    resolved[key] = actual
+            if actual != chosen:
+                return False
+        return True
 
 
 class DesignIdentityReader:

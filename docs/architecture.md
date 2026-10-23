@@ -1109,9 +1109,12 @@ Verification
   An exact compile-context hit still replays preprocessor options (including
   environment-dependent paths and directory aliases), hashes current bytes and
   re-resolves literal includes, including earlier shadow candidates; it skips
-  rebuilding the unchanged graph. Incomplete/oversized identities bypass this
-  tier. No source bodies or semantic coverage proof enter it. A warm result hit
-  skips source preload and all rules. Exact concurrent callers share one build;
+  rebuilding the unchanged graph. Each validation shares at most 4,096 identical
+  name/ordered-search-path lookups within that pass; later validations resolve
+  them afresh, and capacity bypass still checks each choice. Incomplete/oversized
+  identities bypass this tier. No source bodies or semantic coverage proof enter
+  it. A warm result hit skips source preload and all rules. Exact concurrent
+  callers share one build;
   one cancellation preserves it, final-waiter cancellation stops it. Results
   computed across a source change are degraded and never published. Set
   `TRACEWEAVE_STRUCTURAL_SCAN_CACHE=0` to bypass this optimization.

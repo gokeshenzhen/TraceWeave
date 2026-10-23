@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import os
 import threading
 
@@ -50,6 +51,87 @@ def test_include_content_and_earlier_shadow_candidate_invalidate(tmp_path):
     assert second.complete and second.digest != first.digest
     (early / "defs.svh").write_text("`define WIDTH 32\n")
     assert not second.current()
+
+
+@pytest.mark.parametrize('present', [False, True])
+def test_repeated_include_lookup_is_fresh_on_every_validation(tmp_path, monkeypatch, present):
+    from src import design_identity
+    early, late = tmp_path / 'early', tmp_path / 'late'
+    early.mkdir(); late.mkdir()
+    if present:
+        (late / 'defs.svh').write_text('`define WIDTH 8\n')
+    log, _, result = context(tmp_path, '`include "defs.svh"\n' * 8 + 'module top; endmodule\n')
+    result['compile_command'] += f' +incdir+{early}+{late}'
+    identity = DesignIdentityReader().capture(str(log), result)
+    assert identity.complete and len(identity.includes) == 8
+    original, calls = design_identity._resolve, []
+    def resolve(*args):
+        calls.append(args)
+        return original(*args)
+    monkeypatch.setattr(design_identity, '_resolve', resolve)
+    assert identity.current() and len(calls) == 1
+    assert identity.current() and len(calls) == 2
+    # The memo must retain neither a successful lookup nor an absent result
+    # across validation passes, even when source bytes did not change.
+    (early / 'defs.svh').write_text('`define WIDTH 16\n')
+    assert not identity.current() and len(calls) == 3
+
+
+def test_include_lookup_keeps_ordered_search_paths_distinct(tmp_path):
+    from src import design_identity
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    a.mkdir(); b.mkdir()
+    (a / 'defs.svh').write_text('a')
+    (b / 'defs.svh').write_text('b')
+    log, _, result = context(tmp_path)
+    identity = DesignIdentityReader().capture(str(log), result)
+    ab, ba = (str(a), str(b)), (str(b), str(a))
+    includes = tuple(('defs.svh', dirs, design_identity._resolve('defs.svh', dirs))
+                     for dirs in [ab, ba, ab, ba])
+    assert replace(identity, includes=includes).current()
+
+
+@pytest.mark.parametrize('capacity', [0, 1])
+def test_include_lookup_capacity_bypass_still_checks_every_choice(tmp_path, monkeypatch, capacity):
+    from src import design_identity
+    log, _, result = context(tmp_path)
+    (tmp_path / 'known.svh').write_text('known')
+    identity = DesignIdentityReader().capture(str(log), result)
+    dirs = (str(tmp_path),)
+    includes = (('known.svh', dirs, str(tmp_path / 'known.svh')),
+                ('absent.svh', dirs, None)) * 3
+    identity = replace(identity, includes=includes)
+    original, calls = design_identity._resolve, []
+    def resolve(name, directories):
+        calls.append(name)
+        return original(name, directories)
+    monkeypatch.setattr(design_identity, '_resolve', resolve)
+    monkeypatch.setattr(design_identity, '_INCLUDE_LOOKUP_MEMO_LIMIT', capacity)
+    assert identity.current()
+    assert calls.count('absent.svh') == 3  # never memoized at these capacities
+    (tmp_path / 'absent.svh').write_text('new candidate')
+    assert not identity.current()
+
+
+def test_include_memo_hits_observe_cancellation_and_never_publish_a_memo(tmp_path, monkeypatch):
+    from src import cancellation, design_identity
+    log, _, result = context(tmp_path, '`include "absent.svh"\n' * 8 + 'module top; endmodule\n')
+    identity = DesignIdentityReader().capture(str(log), result)
+    original = design_identity._resolve
+    event = threading.Event()
+    def resolve(*args):
+        actual = original(*args)
+        event.set()
+        return actual
+    token = cancellation.push_cancel_event(event)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(design_identity, '_resolve', resolve)
+            with pytest.raises(cancellation.OperationCancelled):
+                identity.current()
+    finally:
+        cancellation.pop_cancel_event(token)
+    assert identity.current()
 
 
 @pytest.mark.parametrize("text", ['`include `DYNAMIC\n', '`include "absent.svh"\n'])
