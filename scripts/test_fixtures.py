@@ -350,7 +350,8 @@ def prepare_for_tests(selected, cache_dir=None):
     million = ('test_multiblock_points_preserve_following_reads', 'test_real_reader_restores_an_existing_view',
                'test_interleaved_reads_release_selection_and_residency',
                'test_lazy_windows_match_generator_across_sessions_in_both_directions',
-               'test_lazy_around_keeps_full_requested_history_and_center')
+               'test_lazy_around_keeps_full_requested_history_and_center',
+               'test_lazy_event_group_cancellation_releases_loaded_and_untouched_signals')
     if any(row['nodeid'].split('::')[-1].split('[')[0] in million for row in selected):
         os.environ['TW_POINT_READ_FSDB'] = str(cache.wave('TW_POINT_READ_FSDB', lambda: cache.activity(1_000_000),
             signal_path='top.data', records=1_000_001, multisession=True))
