@@ -2818,7 +2818,9 @@ a contextual-conversion gap. Variable indexes, out-of-range selections and
 unresolved or unsupported multidimensional types remain gaps. Procedural
 `For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
 `GenScope` instances are still visited. The native capability receipt is
-`npi_input_ports_v6`. Four-state transfer functions model bitwise operations,
+`npi_input_ports_v7`. Known index/range values with a leading zero have the same
+nonnegative interpretation with either signedness; high-bit values still require
+verified signedness. Four-state transfer functions model bitwise operations,
 logical not/and/or, reductions, conditional merging and bounded replication.
 They preserve proven constant regions even with dynamic operands; internal
 dynamic unknowns are distinct from constant RTL X/Z. Common operand signedness

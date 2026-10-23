@@ -449,3 +449,17 @@ def test_one_element_array_pattern_uses_verified_formal_type():
     array.data['Range'][0].data['left_range_handle'] = integer(1)
     _, r = run([one], semantic_categories=['constant_connection'])
     assert r['status'] == 'partial'  # More than one element is not pass-through.
+
+
+def test_enum_range_with_leading_zero_needs_no_signedness_guess():
+    parent = packed('npiParameter', 4, 0, full_name='top.P', binary='10101')
+    parent.data['typespec_handle'].data['Range'][0].data['right_range_handle'] = Handle(
+        type='npiEnumConst', size=3, signed=-1, binary='000')
+    bit = Handle(type='npiParameterBit', size=1, parent_handle=parent, full_name='top.P[1]')
+    one = port('a', bit); one.data['size'] = 1
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '0'
+    # 100 could mean either +4 or -4. Never silently choose a range layout.
+    parent.data['typespec_handle'].data['Range'][0].data['right_range_handle'].data['binary'] = '100'
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert not r['facts'] and 'npi_signedness_unavailable' in r['gaps']

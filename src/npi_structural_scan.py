@@ -19,7 +19,7 @@ from .structural_gap_diagnostics import GapDiagnostics
 from .structural_scan_continuation import initial_state, validate_state, new_job, MAX_FRONTIER_BYTES, MAX_PENDING, MAX_CUMULATIVE
 from .structural_native_values import BITWISE, REDUCTIONS, operate, vector, value as abstract_value
 
-CAPABILITY_VERSION = "npi_input_ports_v6"
+CAPABILITY_VERSION = "npi_input_ports_v7"
 _DYNAMIC = {"npiNet", "npiReg", "npiLogicVar", "npiIntVar", "npiIntegerVar", "npiBitVar", "npiStructVar", "npiStructNet", "npiPackedArrayVar", "npiPackedArrayNet", "npiEnumVar", "npiEnumNet"}
 _CONSTANTS = {'npiConstant', 'npiParameter', 'npiSpecParam', 'npiEnumConst', 'npiPackedArrayParameter'}
 _SELECTS = {'npiBitSelect', 'npiRegBit', 'npiNetBit', 'npiParameterBit', 'npiPartSelect'}
@@ -92,10 +92,14 @@ def scan_native_ports(provider, options, *, state=None):
         size, rows, complete = parts(handle, depth + 1)
         if not complete or len(rows) != 1 or set(rows[0]['bits']) - set('01'):
             raise _UnsupportedPort('npi_selection_range_unavailable')
-        signed = signedness(handle, depth)
         bits = rows[0]['bits']
         value = int(bits, 2)
-        return value - (1 << size) if signed == 1 and bits[0] == '1' else value
+        # A leading zero denotes the same nonnegative index with either
+        # signedness. Enum constants may lack this otherwise irrelevant SDK
+        # metadata; high-bit values still require an unambiguous interpretation.
+        if bits[0] == '0':
+            return value
+        return value - (1 << size) if signedness(handle, depth) == 1 else value
 
     def packed_range(handle, size, depth):
         ts = p.one(handle, 'typespec_handle')
