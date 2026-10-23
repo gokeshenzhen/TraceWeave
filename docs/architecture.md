@@ -2801,13 +2801,22 @@ selections preserve ascending/descending ranges, signed bounds and X/Z; mixed
 concatenations retain only their constant regions. Packed dimensions come from
 the native typespec. For SDK bit objects without an `Index` relationship, only
 a canonical decimal suffix of the exact native parent identity is accepted;
-the index must lie within the verified packed range. Variable indexes, out-of-range
-selections and unresolved or multidimensional types remain gaps. Procedural
+the index must lie within the verified packed range. Symbolic package/genvar bit
+selections can instead use an exact native bit-identity comparison over at most
+256 declared bits. No match, ambiguous matches and missing SDK support remain
+gaps. Packed structure state remains dynamic; packed-array parameters use native
+constant values. Packed-array part selections account for element width rather
+than assuming one bit per index. Sized expression casts and concatenations can
+derive widths from verified operands when the SDK returns Size=-1. Truncation
+and unambiguous signed/zero extension preserve constant regions; an unsigned
+one-bit nonzero/X/Z literal whose unbased-unsized origin is unavailable retains
+a contextual-conversion gap. Variable indexes, out-of-range selections and
+unresolved or unsupported multidimensional types remain gaps. Procedural
 `For`/`Begin`/`Fork` scopes are excluded from instance-port traversal; active
 `GenScope` instances are still visited. The native capability receipt is
-`npi_input_ports_v2`.
+`npi_input_ports_v3`.
 `constant_regions.lsb_offset` counts from the port's least significant position;
-each region's `bits` is MSB first, matching Slang. Unequal actual/port widths,
+each region's `bits` is MSB first, matching Slang. Unverified width conversions,
 unmodeled selections/expressions, unknown directions, unresolved array/scope forms
 and missing metadata create explicit gaps. Initial/reset register values never
 become permanent port ties. Native `constant_connection` covers input bindings;

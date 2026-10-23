@@ -52,7 +52,9 @@ class Provider:
         self.iterators = set(); self.releases = 0; self.iterator_releases = 0
         self.low = NS(Port='Port', InternalScope='InternalScope', Operand='Operand', Range='Range',
                       BinStrVal='bin', iterate=self.iterate, scan=self.scan,
-                      release_handle=self.release, get_value=self.value)
+                      release_handle=self.release, get_value=self.value,
+                      handle_by_index=lambda h, i: h.data.get('bits', {}).get(i),
+                      compare_objects=lambda a, b: int(a is b))
 
     def require_owner(self): pass
     def check(self): self.budget.checkpoint()
@@ -111,9 +113,11 @@ def test_mixed_concat_lsb_regions_and_no_register_initial_evaluation():
     assert r['status'] == 'complete'
 
 
-def test_contextual_widths_and_unmodeled_shapes_are_gaps():
+def test_unambiguous_extension_and_ambiguous_one_bit_literal():
     _, r = run([port('a', const('10'))], semantic_categories=['constant_connection'])
-    assert r['facts'] == [] and 'npi_contextual_width_conversion_unverified' in r['gaps']
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '0010'
+    _, r = run([port('a', const('1'))], semantic_categories=['constant_connection'])
+    assert not r['facts'] and 'npi_contextual_width_conversion_unverified' in r['gaps']
     _, r = run([port('a', Handle(type='npiFuncCall', size=4, binary='0000'))])
     assert not r['facts'] and 'npi_expression_unmodeled' in r['gaps']
 
@@ -281,3 +285,64 @@ def test_global_work_stop_is_not_an_affected_port():
     r = scan_native_ports(p, p.options)
     assert r['gap_summary'] == [dict(reason='scope_limit', occurrences=1,
         affected_ports=0, examples=[], examples_truncated=False)]
+
+
+@pytest.mark.parametrize('bits,signed,expected', [('10', 1, '1110'), ('xz', 1, 'xxxz'),
+                                                 ('xz', 0, '00xz'), ('101010', 0, '1010')])
+def test_assignment_conversion_preserves_signedness_and_four_state(bits, signed, expected):
+    _, r = run([port('a', const(bits, signed))], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == expected
+
+
+def test_packed_struct_state_is_dynamic_but_packed_parameter_is_constant():
+    live = Handle(type='npiStructVar', size=4, binary='1111',
+                  typespec_handle=Handle(type='npiStructTypespec', packed=1))
+    parameter = Handle(type='npiPackedArrayParameter', size=4, binary='10xz')
+    _, r = run([port('live', live), port('param', parameter)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and [f['port'] for f in r['facts']] == ['param']
+    live.data['typespec_handle'].data['packed'] = 0
+    _, r = run([port('live', live)], semantic_categories=['constant_connection'])
+    assert 'npi_packed_type_unavailable' in r['gaps']
+
+
+def test_packed_array_slice_uses_element_stride():
+    parent = packed('npiPackedArrayParameter', 3, 0, binary='11001010')
+    parent.data['size'] = 8
+    parent.data['typespec_handle'].data['type'] = 'npiPackedArrayTypespec'
+    expr = part(parent, 2, 1); expr.data['size'] = 4
+    _, r = run([port('a', expr)], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '0010'
+    expr = part(parent, 3, 3); expr.data['size'] = 2
+    one = port('a', expr); one.data['size'] = 2
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '11'
+
+
+def test_native_identity_resolves_symbolic_index_without_parsing_it():
+    parent = packed('npiReg', 1, 0, full_name='top.live')
+    bit = Handle(type='npiRegBit', size=1, parent_handle=parent, full_name='top.live[pkg::P]')
+    parent.data['bits'] = {0: Handle(), 1: bit}
+    one = port('a', bit); one.data['size'] = 1
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and not r['facts']
+    parent.data['bits'] = {0: bit, 1: bit}
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert 'npi_selection_index_unavailable' in r['gaps']
+
+
+def test_sized_cast_in_concat_can_supply_missing_native_width():
+    live = Handle(type='npiStructVar', size=2, typespec_handle=Handle(type='npiStructTypespec', packed=1, signed=0))
+    cast = Handle(type='npiOperation', op_type='npiExprCastOp', size=-1, Operand=[integer(4), live])
+    expr = Handle(type='npiOperation', op_type='npiConcatOp', size=34, Operand=[const('11'), cast])
+    one = port('a', expr); one.data['size'] = 6
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete'
+    assert r['facts'][0]['constant_regions'] == [dict(lsb_offset=2, width=4, bits='1100')]
+
+
+def test_sized_cast_signedness_comes_from_data_not_width_operand():
+    cast = Handle(type='npiOperation', op_type='npiExprCastOp', size=32, signed=1,
+                  Operand=[integer(4), const('1001', signed=0)])
+    one = port('a', cast); one.data['size'] = 8
+    _, r = run([one], semantic_categories=['constant_connection'])
+    assert r['status'] == 'complete' and r['facts'][0]['constant_regions'][0]['bits'] == '00001001'
