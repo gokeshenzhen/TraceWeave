@@ -27,7 +27,7 @@ def test_binary_against_simulator_vectors(case):
     assert result.width == case['expected']['width']
 
 
-@pytest.mark.parametrize('a,b', itertools.product('01xz', repeat=2))
+@pytest.mark.parametrize('a,b', tuple(itertools.product('01xz', repeat=2)))
 def test_bitwise_truth_tables(a, b):
     assert binary('&', Value(a), Value(b)).bits == (
         '0' if '0' in (a,b) else '1' if a == b == '1' else 'x')
