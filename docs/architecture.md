@@ -1708,6 +1708,43 @@ Display trimming does not stop analysis. Default bounds are 200,000 work steps,
 16,384 cumulative matches and 256 evidence rows; cutoff and actual simulation end
 remain separate. This layer performs no waveform I/O or source parsing.
 
+`verify_window(mode="property")` executes a registered `property_plan` handle
+against VCD/FSDB. Supply `log_path` to select the first failure of the exact source
+directive instance, a normalized `failure_event`, or a `failure_time_ps` TimeSpec.
+No clock or window arithmetic is required from the caller. The tool uses logged
+attempt start times when available, otherwise derives candidate starts from the
+temporal horizon and actual clock events. Simple bounded responses use their
+deadline to select the originating attempt. Unbounded history or a candidate cap
+retains partial coverage. `property_scope` relocates the selected source scope;
+`property_bindings` maps exact source names or unique leaves to dump paths or fixed
+selections. Shape and declaration identity are validated, with no suffix guessing.
+
+Source observations are checked before and after execution, outside the waveform
+lock. Waveform work uses the existing cancellable worker and locks; wave/log
+identities are rechecked before publication. Clock-window discovery is bounded,
+adaptive and uses raw-fs events rather than a guessed period. Public-ps collisions
+at the failure/start anchor are rejected as ambiguous. Data sampling is strictly
+before the physical edge. Asynchronous controls read separate transition timelines,
+including between-edge pulses; sampled functions inside them retain clock sampling.
+Unresolved same-time control ordering stays unknown. First-clock defaults require
+history-origin evidence, never a new arbitrary window boundary. FST property
+execution, multiple clocks, recursive definitions and unmodeled effects remain
+explicit gaps. Source identity does not certify the bytes used by an earlier run.
+
+Property mode returns its own result contract: `failure_reproduced`,
+`not_reproduced`, `insufficient_evidence` or `unsupported`, with execution/coverage,
+candidate selection, per-attempt state, obligations, sampled values and source node
+IDs. It does not redefine legacy `holds`/`vacuous`. Non-reproduction is local to the
+supplied failure; a positive failure under partial coverage remains a local fact.
+Pending attempts, missing evidence and limits never become a global pass.
+
+Property defaults: 16,384 read edges (max 65,536), 1,024 candidate attempts
+(max 4,096), 200,000 work steps (max 2,000,000), 20 seconds total (max 120),
+128 KiB output (4..512 KiB). Existing selection/read limits also apply.
+Asynchronous control inventory additionally caps 65,536 records / 16 MiB logical
+bytes. Output trimming is independent of analysis, and cancellation does not
+advance to another evaluator. Property-only options are rejected in template modes.
+
 Limits: 16 items and 16 shared units; 64 Ki characters per text/declaration and 256 KiB
 total text; 16 KiB argument text per item; 256 captured source inputs / 32 MiB; default
 1,024 temporal nodes per item (maximum 4,096), depth 64 (maximum 128), and bounded AST

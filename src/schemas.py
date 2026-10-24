@@ -2704,6 +2704,31 @@ class VerifyEvidence(SchemaModel):
     signal_values: dict[str, str | None] = Field(default_factory=dict)
 
 
+class PropertyCheckResult(SchemaModel):
+    mode: Literal['property'] = 'property'
+    wave_path: str
+    status: Literal['failure_reproduced','not_reproduced','insufficient_evidence','unsupported']
+    execution_status: Literal['not_run','partial','completed'] = 'not_run'
+    coverage_status: Literal['zero_coverage','partial','complete'] = 'zero_coverage'
+    clock: str | None = None
+    edge: str | None = None
+    plan: dict[str,Any] = Field(default_factory=dict)
+    target: dict[str,Any] = Field(default_factory=dict)
+    failure_event: dict[str,Any] = Field(default_factory=dict)
+    attempt_selection: dict[str,Any] = Field(default_factory=dict)
+    sampling: dict[str,Any] = Field(default_factory=dict)
+    bindings: list[dict[str,Any]] = Field(default_factory=list)
+    bindings_truncated: bool = False
+    attempts: list[dict[str,Any]] = Field(default_factory=list)
+    attempts_truncated: bool = False
+    reproduced_count: int = 0
+    gap_codes: list[str] = Field(default_factory=list)
+    work_steps: int = 0
+    match_count: int = 0
+    output_truncated: bool = False
+    error_code: str | None = None
+
+
 class WindowVerifyResult(SchemaModel):
     sample_phase: Literal["before", "after"] = "after"
     sample_offset_ps: int | None = None

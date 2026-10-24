@@ -203,7 +203,7 @@ Describe your debugging goal and let the assistant choose the tools. All tools a
 | Differences and timing | `diff_first_divergence` | Locate the first confirmed known-value difference |
 |  | `trace_divergence` | Backtrace data, control, and prior state on both sides of a difference |
 |  | `period` | Check periods and cadence anomalies |
-|  | `verify_window` | Check temporal conditions in a waveform window |
+|  | `verify_window` | Check temporal conditions or replay a property plan at a logged failure |
 | Protocols and transactions | `suggest_handshakes` | Discover valid/ready signal bundles |
 |  | `suggest_protocol_bundles` | Discover AHB / APB signal bundles |
 |  | `sweep_handshakes` | Sweep discovered AHB / valid-ready interfaces for anomalies |
@@ -226,6 +226,14 @@ Read each item's completeness and gaps. Unassociated text has an unknown run mod
 an exact `run_anchor` links an existing simulation/formal discovery. See
 [property explanations](docs/architecture.md#property-explanations) for examples,
 the optional frontend requirement and limits.
+
+For a logged assertion, request `include_check_plan=true` and pass its
+`results[].check_plan.handle` to `verify_window` with `mode="property"`, the
+`wave_path`, and a normalized `failure_event` or `log_path`. With a log, the tool
+selects the first failure of the exact directive instance. It derives the clock,
+attempts and history window, reads pre-edge values, and returns source-linked
+evidence. Check `status`, coverage and gaps; `not_reproduced` applies only to that
+failure check. Text inputs can use `property_scope` or exact `property_bindings`.
 
 After `get_sim_paths`, run `scan_structural_risks` as usual, then continue log
 and waveform investigation. Connectivity, hierarchy/file/class queries, X traces,

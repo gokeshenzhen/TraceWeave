@@ -7771,16 +7771,11 @@ async def list_tools():
         Tool(
             name="verify_window",
             description=(
-                "Check clocked predicates against existing waveforms; return holds, cycle/value "
-                "witnesses and coverage. Terms are {signal,op,value} or typed {expr,...}; lists "
-                "combine with AND. Templates: always, never, eventually, implication, sequence. "
-                "Implication checks every edge unless attempts are selected; overlap=false starts "
-                "responses next cycle. Use explicit response bounds for exact delays. For hold "
-                "checks use overlap=false and within_cycles>=1; same-cycle satisfaction may be "
-                "flagged vacuous. sequence checks accepted-beat numeric increments, with modulo "
-                "and restart_when; it is not SVA sequence matching. X/Z stays unknown, unavailable "
-                "responses inconclusive; partial holds does not exclude a problem. Findings link "
-                "to drivers as evidence, without attributing a bus-side root cause."
+                "Check existing waveforms. Template modes: always, never, eventually, implication, "
+                "numeric sequence. Terms {signal,op,value} or typed {expr,...} combine with AND. "
+                "Implication checks every edge by default; response bounds select exact delays. "
+                "Hold checks need overlap=false, within_cycles>=1. Inspect holds, vacuous, unknown "
+                "and coverage together; partial holds excludes nothing. Driver links are evidence."
             ),
             inputSchema={
                 "type": "object",
@@ -7801,6 +7796,7 @@ async def list_tools():
                             "eventually",
                             "implication",
                             "sequence",
+                            "property",
                         ],
                         "description": "Temporal template to evaluate.",
                     },
@@ -7844,7 +7840,7 @@ async def list_tools():
                     },
                     "delta": {
                         "type": "object",
-                        "description": "sequence only: check the per-accepted-beat increment of one signal. predicate is the accepted-beat gate (e.g. hready==1 && htrans active). E.g. AHB byte INCR: {signal:'top.haddr', value:1}. For WRAP bursts pass modulo = burst region bytes (size*len) so the wrap-around beat is accepted via (cur-prev) mod modulo. Pass restart_when (a predicate, e.g. htrans==NONSEQ) to re-seed at each new burst so burst boundaries are not flagged.",
+                        "description": "sequence: accepted-beat numeric increment, not SVA matching. predicate gates beats; modulo handles WRAP regions; restart_when re-seeds burst boundaries.",
                         "properties": {
                             "signal": {
                                 "type": "string",
@@ -7865,7 +7861,7 @@ async def list_tools():
                             },
                             "restart_when": {
                                 "type": "array",
-                                "description": "Optional AND-combined {signal,op,value} or {expr,...} terms. On accepted beats where true, re-seed for a new burst without checking its increment.",
+                                "description": "AND terms; on a matching accepted beat, re-seed without checking its increment.",
                                 "items": {"type": "object"},
                             },
                         },
@@ -7873,11 +7869,11 @@ async def list_tools():
                     },
                     "within_cycles": {
                         "type": "integer",
-                        "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.",
+                        "description": "implication deadline N: [i,i+N] if overlapping, [i+1,i+N] otherwise. Default 1; not an exact delay.",
                     },
                     "overlap": {
                         "type": "boolean",
-                        "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.",
+                        "description": "Include antecedent cycle (default true). false starts next cycle and requires within_cycles>=1. Hold checks need false; same-cycle satisfaction may be flagged vacuous.",
                     },
                     "response_min_cycles": {"type": "integer", "minimum": 0, "maximum": 1000000,
                         "description": "implication: minimum response offset from antecedent end; use with response_max_cycles instead of overlap/within_cycles."},
@@ -8305,6 +8301,15 @@ async def list_tools():
                 "compile_log or kdb_path+top_hint: NPI, then automatic source fallback. " + tool.description)
     for tool in _tools:
         properties = tool.inputSchema["properties"]
+        if tool.name == 'verify_window':
+            from src.property_check import PropertyCheckOptions
+            properties.update({k:{a:b for a,b in v.items() if a!='default'} for k,v in PropertyCheckOptions.model_json_schema()['properties'].items()
+                               if k not in {'wave_path','mode'}})
+            tool.inputSchema['required']=['wave_path','mode']
+            tool.inputSchema['allOf']=[{'if':{'properties':{'mode':{'const':'property'}}},
+                'then':{'required':['property_plan'],'anyOf':[{'required':[key]} for key in
+                    ('failure_event','failure_time_ps','log_path')]},'else':{'required':['clock']}}]
+            tool.description+=' property: use an explain_property include_check_plan handle plus failure event/time or log_path. Automatically locate history/attempts; scope/bindings resolve names. Read status, coverage and gaps; not_reproduced is not a global pass.'
         if tool.name == "get_waveform_summary":
             tool.description += " Optional FST: see fst_backend/fst_reading capabilities and gaps."
         if tool.name in selectable or tool.name == 'inspect_tlul':
@@ -9100,11 +9105,78 @@ async def _handle_explain_property(args: dict):
             run_thread=_run_in_cancellable_thread, source_blocker="design_context_expired", plan_store=_property_plans)
 
 
+async def _handle_property_check(args):
+    from src.property_check import PropertyCheckOptions, check_property, failure_from_log, validate_failure
+    from src.property_engine import UnsupportedPlan, EvaluationLimit
+    from src.property_runtime import _stamp
+    raw=dict(args)
+    def blocked(code,status='insufficient_evidence'):
+        return schemas.PropertyCheckResult(wave_path=str(args.get('wave_path','')),status=status,
+                                          error_code=code,gap_codes=[code])
+    try:
+        if isinstance(raw.get('failure_time_ps'),str):raw['failure_time_ps']=_resolve_time(raw['failure_time_ps'])
+        options=PropertyCheckOptions.model_validate(raw)
+        if options.wave_path.lower().endswith('.fst'):
+            return blocked('property_fst_not_validated','unsupported')
+        deadline=time.monotonic()+options.timeout_sec
+        async with asyncio.timeout(options.timeout_sec):
+            entry=_property_plans.resolve(options.property_plan)
+            async def validate():
+                if _property_plans.entries.get(options.property_plan) is not entry:
+                    raise ValueError('property_plan_expired')
+                if entry.current and not await _run_in_cancellable_thread(entry.current):
+                    raise ValueError('property_source_identity_changed')
+                if entry.validate:await entry.validate(deadline)
+            await validate()
+            log_stamp=_stamp(options.log_path) if options.log_path else None
+            if options.log_path:
+                event=await _run_in_cancellable_thread(lambda:failure_from_log(options,entry.plan))
+            elif options.failure_event is not None:
+                event={**options.failure_event,'selection_basis':'supplied_failure_event'}
+            else:
+                event=dict(time_ps=options.failure_time_ps,selection_basis='caller_supplied_time')
+            validate_failure(event,entry.plan)
+            wave_stamp=_stamp(options.wave_path)
+            def work():
+                cancellation.check_cancelled()
+                if time.monotonic()>=deadline:raise TimeoutError('property_timeout')
+                return check_property(_get_parser(options.wave_path),entry.plan,options,event,deadline=deadline)
+            result=await _run_in_wave_request(options.wave_path,work)
+            await validate()
+            if _stamp(options.wave_path)!=wave_stamp:
+                raise ValueError('property_wave_identity_changed')
+            if options.log_path and _stamp(options.log_path)!=log_stamp:
+                raise ValueError('property_log_identity_changed')
+            return schemas.PropertyCheckResult.model_validate(result)
+    except UnsupportedPlan as exc:
+        return blocked(str(exc),'unsupported')
+    except EvaluationLimit as exc:
+        return blocked(str(exc))
+    except TimeoutError:
+        return blocked('property_timeout')
+    except ValidationError:
+        return blocked('property_check_arguments_invalid')
+    except KeyError:
+        return blocked('property_signal_unavailable')
+    except (OSError,ValueError,RuntimeError) as exc:
+        code=str(exc)
+        if len(code)>100 or not code or any(not(c.islower() or c.isdigit() or c=='_') for c in code):
+            code='property_input_or_wave_unavailable'
+        return blocked(code)
+
+
 async def _dispatch(name: str, args: dict):
     if any(key.startswith("_") for key in args):
         return schemas.ToolErrorResult(error="Reserved internal argument.", error_code="invalid_design_context_arguments")
     if name == "explain_property":
         return await _handle_explain_property(args)
+    if name == 'verify_window' and args.get('mode')=='property':
+        return await _handle_property_check(args)
+    if name == 'verify_window':
+        from src.property_check import PropertyCheckOptions
+        if (set(args)&(set(PropertyCheckOptions.model_fields)-{'mode','wave_path'})):
+            return schemas.ToolErrorResult(error='Property plan options require mode=property.',
+                                           error_code='property_options_require_property_mode')
     if name == "get_diagnostic_snapshot":
         return await _dispatch_inner(name, args)
     from src.native_query import NATIVE_TOOLS

@@ -545,6 +545,22 @@ Most of these are not part of the default flow above; reach for them when the sy
 - `verify_window(wave_path, clock, mode, predicate | antecedent+consequent | delta)` — evaluate a temporal predicate (always/never/eventually/implication/sequence) over a clock window and return a `holds` verdict plus a concrete witness/counterexample. To prove or disprove an RTL inference in one call. For `implication`, `overlap=false` (`|=>`) starts the response window the NEXT cycle — the shape for a **hold/stability** property ("B must STILL hold next cycle", e.g. `(htrans==2 && hready==0) |=> htrans==2` proves premature-deassertion). With the default `overlap=true` such a property is a **vacuous pass** (B already true on A's own cycle); the result is flagged `vacuous=true` + a `VACUOUS PASS` warning so the `holds=true` is not misread as exclusion evidence — re-run with `overlap=false`. `sequence` checks the per-accepted-beat increment of one signal (address-stride): `predicate` is the accepted-beat gate, `delta`=`{signal,value,op?,modulo?,restart_when?}` — `modulo` absorbs a legal WRAP wrap-around, `restart_when` (e.g. htrans==NONSEQ) re-seeds at burst starts, both supplied by you so the tool stays burst-decode-free. On a violation it sets `violating_signal` + a `next_actions` link to `explain_signal_driver` (master-driven signal → points at the master by elimination). Multi-slave/master: scope a property to one subset with a predicate term (per-slave `HSEL`, per-master `HMASTER`) — `inspect_handshake`'s htrans-only valid cannot qualify by select, so use the verify_window gate for per-slave/per-master checks.
 - `reconstruct_transactions(wave_path, clock, req_valid, req_ready, cmp_valid, cmp_ready, ...)` — id-correlated request/response transaction layer: per-transaction latency plus outstanding/ordering/unmatched facts. AXI read AR→R, write AW→B (+ optional W-data channel); `req_id`/`cmp_id` optional (omit both for in-order AXI-Lite/APB streams).
 
+For a failed concurrent assertion, use `explain_property(include_check_plan=true)`
+on the exact directive instance, then call `verify_window(mode="property",
+property_plan=<handle>, wave_path=..., log_path=...)`. Log selection uses the first
+failure of that instance, independently of other assertion failures. Alternatively
+pass the normalized `failure_event` returned by log parsing, or an explicit
+`failure_time_ps` TimeSpec. The tool derives the relevant attempts and history;
+the failure timestamp is not automatically the attempt start. Logged start times
+are preferred. Text plans can infer their waveform scope from the supplied failure
+instance, or use `property_scope` / exact `property_bindings`.
+
+Read `failure_reproduced`, `not_reproduced`, `insufficient_evidence` or `unsupported`
+alongside coverage, candidate selection and per-attempt evidence. A reproduced
+failure is a waveform fact, not a DUT/TB root-cause assignment. A cutoff, pending
+obligation, missing history or unobserved signal is not a pass. This targeted check
+does not replace the default structural scan or handshake sweep.
+
 ## Iterative Debug Pattern
 
 After step 7, the agent may loop:

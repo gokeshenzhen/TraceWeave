@@ -650,6 +650,7 @@ def sample_signals_on_edges(
         # insertion per sampled signal per edge. Public tool results are built
         # by inspect_handshake and remain unchanged.
         result["edge_times"] = public_edges
+        result["edge_times_fs"] = list(edge_times) if exact else [at*1000 for at in edge_times]
         result["signal_columns"] = signal_columns
     if max_edges is not None:
         result["sample_limit_reached"] = sample_limit_reached

@@ -93,6 +93,9 @@ def prepare_plan(row):
     if gaps:return None,sorted(set(gaps))
     plan=deepcopy({k:row.get(k) for k in ('id','root','nodes','clocks','variables','directive','identity','target','mode')})
     plan.update(version=PLAN_VERSION,signals=signals,histories=histories)
+    from .property_engine import PropertyEngine, UnsupportedPlan
+    try:PropertyEngine(plan,[])
+    except UnsupportedPlan as exc:return None,[str(exc)]
     raw=json.dumps(plan,sort_keys=True,separators=(',',':')).encode()
     if len(raw)>4*1024*1024:return None,['property_plan_size_limit']
     plan['fingerprint']=hashlib.sha256(raw).hexdigest()
