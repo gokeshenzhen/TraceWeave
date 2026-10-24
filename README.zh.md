@@ -219,6 +219,14 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 `run_anchor` 关联已有 simulation/formal 发现结果。示例、可选前端依赖与资源限制见
 [断言语义解释](docs/architecture.md#property-explanations)。
 
+复核日志中的断言失败时，先请求 `explain_property(include_check_plan=true)`，
+将 `results[].check_plan.handle` 传给 `verify_window` 的 `property_plan`，并指定
+`mode="property"`、`wave_path` 以及 `log_path` 或规范化的 `failure_event`。
+提供日志时，工具选择目标断言实例的首次失败，自动推导时钟、尝试起点与历史窗口，
+读取沿前值并返回关联源码节点的数值与端点证据。结合 `status`、覆盖范围和缺口解释结果；
+`not_reproduced` 只针对本次失败复核，不代表全局通过。文本计划可通过 `property_scope`
+或精确的 `property_bindings` 绑定波形信号。
+
 `get_sim_paths` 后照常执行 `scan_structural_risks`，继续日志与波形调查。
 连接、层级/文件/类、X 追踪、packed 和失败关联工具可直接接收 `compile_log`：
 健康 NPI 仅校验有界元数据与现成 KDB，不提前捕获或校验完整源码。
