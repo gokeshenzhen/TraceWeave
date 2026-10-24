@@ -38,6 +38,8 @@ class PropertyRoleContext(Model):
 
 
 class ExplainPropertyOptions(PropertyInput):
+    include_check_plan: bool = Field(default=False,
+        description="Prepare a bounded, process-scoped static plan for verify_window; does not read waveforms.")
     items: list[PropertyInput] | None = Field(default=None, min_length=1, max_length=16)
     units: list[PropertyUnit] = Field(default_factory=list, max_length=16)
     mode: Literal["auto", "simulation", "formal", "unknown"] = "auto"
@@ -94,6 +96,7 @@ class PropertyNode(Model):
 
 
 class PropertyExplanation(Model):
+    check_plan: dict[str, Any] | None = None
     id: str
     identity: dict[str, Any] = Field(default_factory=dict)
     target: dict[str, Any] = Field(default_factory=dict)

@@ -42,6 +42,8 @@ class Projector:
         self.clock_ids = {}
         self.native_clocks = {}
         self.empty_repetition_subtrees = set()
+        self.execution_requested = False
+        self.history_sequence = 0
 
     def charge(self, depth=0):
         self.visits += 1
@@ -221,6 +223,9 @@ class Projector:
         if kind(expr) == 'Invalid':
             self.missing('unbound_value', 'context', 'Value expression could not be bound.', expr,
                          'Supply the original declarations, macros, parameter values and clock in a shared unit or compile context.')
+        if self.execution_requested and expr.type.isIntegral:
+            from .property_value_projection import project_value
+            out['execution']=project_value(self,expr,clock)
         return out
 
     def call(self, expr, clock, depth):

@@ -231,7 +231,7 @@ def _trim(result, options):
     return result
 
 
-async def explain_properties(arguments, *, registry, config, run_thread, prepared=None, validate=None, source_blocker=None):
+async def explain_properties(arguments, *, registry, config, run_thread, prepared=None, validate=None, source_blocker=None, plan_store=None):
     options=ExplainPropertyOptions.model_validate(arguments)
     started=time.monotonic(); deadline=started+options.timeout_sec
     entries=[i.model_dump() for i in options.entries()]
@@ -244,7 +244,7 @@ async def explain_properties(arguments, *, registry, config, run_thread, prepare
     results=[]
     for item in entries:
         payload={'item':item,'limits':{'max_nodes':options.max_nodes,'max_depth':options.max_depth},
-                 'frontend_version':config.frontend_version}
+                 'frontend_version':config.frontend_version,'execution_plan':options.include_check_plan}
         identity=None
         try:
             if time.monotonic()>=deadline: raise TimeoutError
@@ -293,6 +293,17 @@ async def explain_properties(arguments, *, registry, config, run_thread, prepare
             if current!=mode:
                 mode={'value':'unknown','basis':'run_association_changed_during_call','run_identity':mode.get('run_identity')}
         roles(row,mode,options.role_context.model_dump() if options.role_context else None)
+        if options.include_check_plan and plan_store is not None:
+            from .property_plan import prepare_plan
+            try:
+                prepared_plan=await asyncio.wait_for(run_thread(lambda:prepare_plan(row)),
+                                                     max(.001,deadline-time.monotonic()))
+                # Publish before display trimming; only publication touches the
+                # session store on the event loop. Compilation stays cancellable.
+                row['check_plan']=plan_store.publish(row,current=identity.current if identity is not None else None,
+                                                     validate=validate,prepared=prepared_plan)
+            except TimeoutError:
+                row['check_plan']=dict(status='unavailable',gap_codes=['property_plan_timeout'])
         results.append(row)
     result={'schema_version':'traceweave.property.v1',
             'status':'complete' if all(r['semantic_status']=='complete' for r in results) else

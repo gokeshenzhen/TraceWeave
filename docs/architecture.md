@@ -1680,6 +1680,22 @@ must stay labelled as inference.
 `diagnostics_truncated` marks the frontend diagnostic display cap; errors precede
 warnings, and warning-only truncation does not make complete semantic analysis partial.
 
+`include_check_plan=true` optionally lowers bound integral values through the shared
+typed Slang expression projector and prepares a static property plan. Sampled
+functions retain separate history inputs and declaration defaults; local assertion
+variables are not waveform dependencies. Each item returns `check_plan` with a
+prepared handle or specific gap codes. Preparation is cancellable, stays off the
+event loop and reads no waveform. The full graph is registered before display
+trimming, so `detail=summary` can still return its plan handle. Unvalidated user JSON
+is never accepted as a trusted plan.
+
+Plans are process scoped: 10-minute idle expiry, 32-entry / 32 MiB store, at most
+4 MiB per plan; session reset clears them. They retain the source observation and
+validation hooks for later execution. Plan preparation does not evaluate a property
+or establish its runtime activation; `runtime_analysis` remains `not_performed`.
+Unsupported values, recursive references, unresolved semantics and clocks outside
+the supported direct single-bit clock shape return explicit preparation gaps.
+
 Limits: 16 items and 16 shared units; 64 Ki characters per text/declaration and 256 KiB
 total text; 16 KiB argument text per item; 256 captured source inputs / 32 MiB; default
 1,024 temporal nodes per item (maximum 4,096), depth 64 (maximum 128), and bounded AST

@@ -1605,6 +1605,8 @@ def reset_session_state():
     _clear_formal_result_state()
     if "_property_runs" in globals():
         _property_runs.entries.clear()
+    if "_property_plans" in globals():
+        _property_plans.clear()
 
 
 from src.source_fallback_runtime import SourceFallbackRuntime
@@ -1613,7 +1615,9 @@ _source_fallback_runtime = SourceFallbackRuntime()
 _native_failure_memory = NativeFailureMemory()
 
 from src.property_runtime import PropertyRunRegistry, explain_properties
+from src.property_plan import PropertyPlanStore
 _property_runs = PropertyRunRegistry()
+_property_plans = PropertyPlanStore()
 
 
 _STRUCTURAL_SCAN_WORKFLOW_INSTRUCTION = (
@@ -7767,24 +7771,16 @@ async def list_tools():
         Tool(
             name="verify_window",
             description=(
-                "Check signal conditions or SV expression predicates over a clock window and return a precise "
-                "verdict (holds) plus a concrete witness/counterexample (cycle + sampled "
-                "values). You state the predicate; the tool checks it against the waveform "
-                "over the requested cycles. A term is {signal, op, value} "
-                "(op: eq/ne/gt/ge/lt/le/is_x/is_known) or a typed {expr,...} using SV truth "
-                "conversion. A predicate is a list of terms (implicit AND). Modes: "
-                "always(P), never(P), eventually(P), implication (A |-> B within N "
-                "cycles, the protocol-response template; set overlap=false for |=> = a "
-                "stability/hold property where B must STILL hold the NEXT cycle, e.g. "
-                "HTRANS/valid held through a wait state), and sequence (the per-accepted-beat "
-                "increment of a signal — address-stride checks like AHB haddr +stride; "
-                "supports modulo for WRAP bursts and restart_when for burst boundaries). "
-                "x/z cycles are reported as "
-                "unknown (never silently passed); an implication whose response window runs "
-                "past end-of-trace is reported inconclusive (never silently failed). On a "
-                "finding it sets violating_signal + a next_action to explain_signal_driver "
-                "(bus facts do not self-attribute master/slave). Use to "
-                "prove/disprove an RTL inference in one call. Reads existing waveforms only."
+                "Check clocked predicates against existing waveforms; return holds, cycle/value "
+                "witnesses and coverage. Terms are {signal,op,value} or typed {expr,...}; lists "
+                "combine with AND. Templates: always, never, eventually, implication, sequence. "
+                "Implication checks every edge unless attempts are selected; overlap=false starts "
+                "responses next cycle. Use explicit response bounds for exact delays. For hold "
+                "checks use overlap=false and within_cycles>=1; same-cycle satisfaction may be "
+                "flagged vacuous. sequence checks accepted-beat numeric increments, with modulo "
+                "and restart_when; it is not SVA sequence matching. X/Z stays unknown, unavailable "
+                "responses inconclusive; partial holds does not exclude a problem. Findings link "
+                "to drivers as evidence, without attributing a bus-side root cause."
             ),
             inputSchema={
                 "type": "object",
@@ -9082,7 +9078,7 @@ async def _handle_explain_property(args: dict):
     config = get_source_graph_execution_config()
     if not options.design_handle:
         return await explain_properties(args, registry=_property_runs, config=config,
-                                        run_thread=_run_in_cancellable_thread)
+                                        run_thread=_run_in_cancellable_thread, plan_store=_property_plans)
     store = _design_context_store
     try:
         with store.pin(options.design_handle) as entry:
@@ -9098,10 +9094,10 @@ async def _handle_explain_property(args: dict):
                 except design_context_runtime.ContextUnavailable:
                     raise ValueError("design_context_changed") from None
             return await explain_properties(args, registry=_property_runs, config=config,
-                run_thread=_run_in_cancellable_thread, prepared=context, validate=validate)
+                run_thread=_run_in_cancellable_thread, prepared=context, validate=validate, plan_store=_property_plans)
     except design_context_runtime.ContextUnavailable:
         return await explain_properties(args, registry=_property_runs, config=config,
-            run_thread=_run_in_cancellable_thread, source_blocker="design_context_expired")
+            run_thread=_run_in_cancellable_thread, source_blocker="design_context_expired", plan_store=_property_plans)
 
 
 async def _dispatch(name: str, args: dict):

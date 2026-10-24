@@ -264,6 +264,7 @@ def explain(payload):
             trees=list(frontend.syntaxTrees)
         root=compilation.getRoot()
         projector=Projector(manager,result,payload['limits'],deadline=started+payload['timeout_sec'])
+        projector.execution_requested=bool(payload.get('execution_plan'))
         diagnostics,syntax_bad,diag_limited=_diagnostics(compilation,trees,manager)
         result['diagnostics']=diagnostics
         result['syntax_status']='invalid' if syntax_bad else 'valid'

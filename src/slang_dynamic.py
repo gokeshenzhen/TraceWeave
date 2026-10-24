@@ -61,7 +61,7 @@ def fixed_array_type(typ):
     return typ, tuple(dimensions), bits
 
 
-def expression(projector,node,record,aliases,*,budget=None,depth=0):
+def expression(projector,node,record,aliases,*,budget=None,depth=0,special=None):
     from .slang_connectivity_projector import _kind_name,_expression_width,_constant_expression_bits,_constant_int
     check_cancelled()
     budget = [MAX_EXPR_NODES] if budget is None else budget
@@ -76,7 +76,11 @@ def expression(projector,node,record,aliases,*,budget=None,depth=0):
     signed = bool(getattr(typ,'isSigned',False))
     two_state = typ is not None and not bool(getattr(typ,'isFourState',True))
     def visit(n):
-        return expression(projector,n,record,aliases,budget=budget,depth=depth+1)
+        return expression(projector,n,record,aliases,budget=budget,depth=depth+1,special=special)
+    if special is not None:
+        replacement = special(node, visit, width, signed, two_state)
+        if replacement is not None:
+            return replacement
     def fail(reason='dynamic_evidence_unavailable'):
         refs = projector._template_expression_selections(node,record,aliases)
         return Expr('unsupported',width,tuple(Expr('signal',s.width,signal=s.symbol,bits=s.bits) for s in refs[:64]),reason=reason)
