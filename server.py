@@ -9106,13 +9106,13 @@ async def _handle_explain_property(args: dict):
 
 
 async def _handle_property_check(args):
-    from src.property_check import PropertyCheckOptions, check_property, failure_from_log, validate_failure
+    from src.property_check import PropertyCheckOptions, PropertyReadIncomplete, check_property, failure_from_log, validate_failure
     from src.property_engine import UnsupportedPlan, EvaluationLimit
     from src.property_runtime import _stamp
     raw=dict(args)
-    def blocked(code,status='insufficient_evidence'):
+    def blocked(code,status='insufficient_evidence',gaps=None):
         return schemas.PropertyCheckResult(wave_path=str(args.get('wave_path','')),status=status,
-                                          error_code=code,gap_codes=[code])
+                                          error_code=code,gap_codes=gaps or [code])
     try:
         if isinstance(raw.get('failure_time_ps'),str):raw['failure_time_ps']=_resolve_time(raw['failure_time_ps'])
         options=PropertyCheckOptions.model_validate(raw)
@@ -9146,6 +9146,8 @@ async def _handle_property_check(args):
             if options.log_path and _stamp(options.log_path)!=log_stamp:
                 raise ValueError('property_log_identity_changed')
             return schemas.PropertyCheckResult.model_validate(result)
+    except PropertyReadIncomplete as exc:
+        return blocked(str(exc),gaps=exc.gap_codes)
     except UnsupportedPlan as exc:
         return blocked(str(exc),'unsupported')
     except EvaluationLimit as exc:

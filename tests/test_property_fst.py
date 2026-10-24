@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip('pylibfst', reason='install the optional [fst] extra')
 import server
 from fst_analysis_fixture import cycle_pair, write_pair
+from fst_fixture import write_fst
 from test_fst_integration import call, clean_state
 from test_fst_request_reuse import workers
 
@@ -76,3 +77,109 @@ def test_native_fst_errors_keep_their_original_codes(tmp_path,workers):
     result=check(broken,handle)
     assert result['error_code'].startswith('fst_'),result
     assert result.get('fst_runtime'),result
+
+
+@pytest.mark.parametrize('gap',[(12,20),(40,50)])
+def test_recording_gap_only_affects_intersecting_checks(tmp_path,gap,workers):
+    paths=cycle_pair(tmp_path,dict(req=1,ack=1),[
+        dict(req=1,ack=0),dict(req=0,ack=0),dict(req=0,ack=0),
+        dict(req=0,ack=0),dict(req=0,ack=0),dict(req=0,ack=0)],
+        activity=[(gap[0],0),(gap[1],1)])
+    result=check(paths[0],prepare(),started=5)
+    if gap[0]<35:
+        assert result['status']=='insufficient_evidence',result
+        assert result['coverage_status']!='complete'
+        assert result['reproduced_count']==0 and result['gap_codes']
+        assert 'dump_inactive' in result['gap_codes'],result
+    else:
+        assert result['status']=='failure_reproduced',result
+        assert result['coverage_status']=='complete'
+
+
+def test_recovered_recording_supports_a_fresh_attempt(tmp_path):
+    declarations=[(name,1,'wire','input',None) for name in ('clk','req','ack')]
+    rows=[(0,'clk','0'),(0,'req','0'),(0,'ack','0'),(5,'clk','1'),(10,'clk','0'),
+          (21,'clk','1'),(22,'clk','0'),(23,'req','1'),(23,'ack','1'),
+          (24,'ack','0'),(25,'clk','1'),(30,'clk','0'),(30,'req','0'),(35,'clk','1')]
+    path=write_fst(tmp_path/'recovered.fst',rows,declarations=declarations,
+                   end=40,activity=[(12,0),(20,1)])
+    result=check(path,prepare('req |=> ack'),started=25)
+    assert result['status']=='failure_reproduced',result
+    assert result['sampling']['history_start_ps']>=20
+    assert result['attempts'][0]['start_time_ps']==25
+
+
+def test_missing_history_and_truncated_reads_remain_inconclusive(tmp_path,monkeypatch):
+    from contextlib import contextmanager
+    from dataclasses import replace
+    from src.fst_parser import FSTParser
+    paths=cycle_pair(tmp_path,dict(req=1,ack=1),[dict(req=1,ack=0),dict(req=0,ack=0)])
+    result=check(paths[0],prepare('req |-> $past(ack)'),fail=5,started=5)
+    assert result['status']=='insufficient_evidence',result
+    assert 'history_before_capture_unavailable' in result['gap_codes']
+    original=FSTParser._event_pages
+    @contextmanager
+    def truncated(self,*args,**kwargs):
+        with original(self,*args,**kwargs) as reader:
+            read=reader.read_page
+            reader.read_page=lambda:replace(read(),truncated=True)
+            yield reader
+    monkeypatch.setattr(FSTParser,'_event_pages',truncated)
+    result=check(paths[0],prepare('req |=> ack'),fail=15,started=5)
+    assert result['status']=='insufficient_evidence',result
+    assert result['coverage_status']!='complete' and result['reproduced_count']==0
+
+
+def test_subps_clock_preserves_sampling_and_rejects_ambiguous_anchor(tmp_path):
+    declarations=[(name,1,'wire','input',None) for name in ('clk','req','ack')]
+    paths=write_pair(tmp_path,declarations,[
+        (0,'clk','0'),(0,'req','1'),(0,'ack','0'),(1,'clk','1'),(1,'ack','1'),
+        (15,'clk','0'),(20,'clk','1')],scale=-13,end=30)
+    handle=prepare('req |-> ack')
+    results=[check(path,handle,fail=1,started=1) for path in paths]
+    for result in results:
+        assert result['status']=='failure_reproduced',result
+        assert result['attempts'][0]['end_time_fs']==100
+    assert results[0]['attempts']==results[1]['attempts']
+    path=write_fst(tmp_path/'ambiguous.fst',[(0,'clk','0'),(0,'req','1'),(0,'ack','0'),
+        (1,'clk','1'),(2,'clk','0'),(3,'clk','1')],declarations=declarations,scale=-13,end=10)
+    result=check(path,handle,fail=1)
+    assert result['status']=='insufficient_evidence',result
+    assert result['error_code']=='property_failure_clock_ambiguous'
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('stop',['cancel','property_timeout','fst_timeout'])
+async def test_active_property_reads_reap_workers_on_stop(tmp_path,monkeypatch,workers,stop):
+    import anyio,threading,time
+    from src import fst_runtime
+    from src.fst_runtime import FstProcess
+    from test_property_check import plan
+    path,_=cycle_pair(tmp_path,dict(req=1,ack=1),[dict(req=1,ack=0)]*4)
+    handle=await plan()
+    entered=threading.Event();original=FstProcess.ask;results=[]
+    def blocked(self,command):
+        if command.get('op')=='batch':
+            entered.set()
+            while True:
+                self.check();time.sleep(.005)
+        return original(self,command)
+    monkeypatch.setattr(FstProcess,'ask',blocked)
+    if stop=='fst_timeout':monkeypatch.setattr(fst_runtime,'REQUEST_TIMEOUT_SEC',1)
+    async def request():
+        import json
+        response=await server.call_tool('verify_window',dict(mode='property',wave_path=str(path),
+            property_plan=handle,failure_event=dict(time_ps=35,instance_path='top.ap'),
+            timeout_sec=1 if stop=='property_timeout' else 10))
+        results.append(json.loads(response[0].text))
+    with anyio.fail_after(5):
+        async with anyio.create_task_group() as group:
+            group.start_soon(request)
+            assert await anyio.to_thread.run_sync(entered.wait,2)
+            if stop=='cancel':group.cancel_scope.cancel()
+        while any(child.poll() is None or directory.exists() for _,child,directory in workers):
+            await anyio.sleep(.01)
+    assert workers
+    if stop!='cancel':assert results[0]['error_code']==stop,results
+    parser=server._get_parser(str(path))
+    assert not parser._native_sessions and parser._active_batch is None

@@ -18,6 +18,12 @@ from .scope_metadata import file_identity
 from .waveform_selection import SelectionParser
 
 
+class PropertyReadIncomplete(ValueError):
+    def __init__(self,code,gaps=()):
+        super().__init__(code)
+        self.gap_codes=sorted({code,*gaps})
+
+
 class PropertyCheckOptions(BaseModel):
     model_config=ConfigDict(extra='forbid')
     wave_path: str = Field(min_length=1,max_length=4096)
@@ -178,22 +184,37 @@ def bind_signals(parser,plan,options,event):
     return adapter,keys,receipts
 
 
-def _clock_window(parser,clock,edge,fail,needed,max_edges,deadline,required_start=None):
-    width=max(1,min(fail or 1,1000));seen=set()
+def _clock_window(parser,clock,edge,fail,needed,max_edges,deadline,required_start=None,history_edges=0):
+    width=max(1,min(fail or 1,1000));seen=set();gaps=set()
+    def read(start):
+        check_cancelled()
+        if time.monotonic()>=deadline:raise TimeoutError('property_timeout')
+        result=sample_signals_on_edges(parser,clock,[],start_ps=start,end_ps=fail,edge=edge,
+            sample_phase='before',sample_offset_ps=0,compact=True,max_edges=max_edges)
+        gaps.update(result.get('sampling_gaps',[]))
+        return result
+    if required_start is not None and history_edges==0:
+        # The logged attempt bounds all required clock evidence. Include the
+        # preceding public ps because labels are ceilings of physical fs times.
+        start=max(0,required_start-1)
+        sampled=read(start)
+        if (not sampled.get('transition_data_truncated') and not sampled.get('sample_limit_reached')
+                and not sampled.get('sampling_gaps')
+                and sampled['edge_times'].count(required_start)==1):
+            return start,sampled
     for _ in range(64):
         check_cancelled()
         if time.monotonic()>=deadline:raise TimeoutError('property_timeout')
         start=max(0,fail-width)
-        if start in seen:raise ValueError('property_clock_read_limit')
+        if start in seen:raise PropertyReadIncomplete('property_clock_read_limit',gaps)
         seen.add(start)
-        sampled=sample_signals_on_edges(parser,clock,[],start_ps=start,end_ps=fail,edge=edge,
-            sample_phase='before',sample_offset_ps=0,compact=True,max_edges=max_edges)
+        sampled=read(start)
         if sampled.get('transition_data_truncated') or sampled.get('sample_limit_reached'):
-            if width<=1:raise ValueError('property_clock_read_limit')
+            if width<=1:raise PropertyReadIncomplete('property_clock_read_limit',gaps)
             width=max(1,width//2);continue
         if (len(sampled['edge_times'])>=needed or start==0) and (required_start is None or start<=required_start):return start,sampled
         width*=2
-    raise ValueError('property_clock_read_limit')
+    raise PropertyReadIncomplete('property_clock_read_limit',gaps)
 
 
 def _async_controls(parser,plan,keys,engine,start,end,deadline):
@@ -222,7 +243,7 @@ def _async_controls(parser,plan,keys,engine,start,end,deadline):
             if time.monotonic()>=deadline:raise TimeoutError('property_timeout')
             result=_read_sweep_transition_result(parser,keys[source],start,end,kind='signal',sample_phase='before')
             if result.get('truncated') or result.get('sampling_gaps'):
-                raise ValueError('property_abort_transitions_incomplete')
+                raise PropertyReadIncomplete('property_abort_transitions_incomplete',result.get('sampling_gaps',[]))
             anchor=sampling_anchor(result)
             states[source]=(anchor.get('value') or {}).get('bin') if anchor else None
             for row in result.get('transitions',[]):
@@ -296,7 +317,7 @@ def check_property(parser,plan,options,event,*,deadline):
     needed=(maximum+1 if maximum is not None else options.max_attempts)+(history or 0)+2
     requested=min(options.max_edges,max(2,needed))
     required_start=0 if history is None else started
-    start,probe=_clock_window(adapter,keys[source],edge,fail,requested,options.max_edges,deadline,required_start)
+    start,probe=_clock_window(adapter,keys[source],edge,fail,requested,options.max_edges,deadline,required_start,history)
     times=probe['edge_times'];anchors=[i for i,t in enumerate(times) if t==fail]
     if len(anchors)!=1:raise ValueError('property_failure_clock_ambiguous' if anchors else 'property_failure_clock_not_found')
     target=anchors[0]
@@ -307,7 +328,7 @@ def check_property(parser,plan,options,event,*,deadline):
     sampled=sample_signals_on_edges(adapter,keys[source],list(keys.values()),start_ps=start,end_ps=fail,
         edge=edge,sample_phase='before',sample_offset_ps=0,compact=True,max_edges=options.max_edges)
     if sampled.get('transition_data_truncated') or sampled.get('sample_limit_reached') or sampled.get('sampling_gaps'):
-        raise ValueError('property_sampling_incomplete')
+        raise PropertyReadIncomplete('property_sampling_incomplete',sampled.get('sampling_gaps',[]))
     if sampled.get('signal_errors') or any(k not in sampled['signal_columns'] for k in keys.values()):
         raise ValueError('property_signal_unavailable')
     times=sampled['edge_times'];raw_times=sampled['edge_times_fs']
@@ -343,6 +364,7 @@ def check_property(parser,plan,options,event,*,deadline):
         end=attempt['end_index']
         raw_end=attempt.get('end_time_fs')
         if raw_end is None and end is not None and 0<=end<len(times):raw_end=raw_times[end]
+        attempt['end_time_fs']=raw_end
         attempt['end_time_ps']=(raw_end+999)//1000 if raw_end is not None else None
         same_tick=attempt['end_time_ps']==fail
         same_attempt=started is not None and attempt['end_time_ps'] is not None and attempt['end_time_ps']<=fail

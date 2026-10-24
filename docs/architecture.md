@@ -1737,8 +1737,10 @@ explicit gaps. Source identity does not certify the bytes used by an earlier run
 FST property reads share the existing isolated reader, per-path lock, request
 ownership and cumulative 30-second FST deadline (in addition to the property
 deadline). Initial observations strictly before a window can seed asynchronous
-controls without becoming fabricated predecessor transitions. Recording gaps and
-incomplete reads prevent a complete check. Native FST failures retain the common
+controls without becoming fabricated predecessor transitions. A logged attempt
+with no sampled-history dependency first reads its own window, allowing complete
+evidence after an earlier recording gap. Gaps in required evidence and incomplete
+reads prevent a complete check; `gap_codes` retain reader reasons. Native FST failures retain the common
 `fst_*` error codes, and request exit reaps workers and private event spools.
 
 Property mode returns its own result contract: `failure_reproduced`,
@@ -1747,6 +1749,7 @@ candidate selection, per-attempt state, obligations, sampled values and source n
 IDs. It does not redefine legacy `holds`/`vacuous`. Non-reproduction is local to the
 supplied failure; a positive failure under partial coverage remains a local fact.
 Pending attempts, missing evidence and limits never become a global pass.
+Attempt endpoints retain `end_time_fs` alongside ceiling-rounded `end_time_ps`.
 Semantic failure and simulator reporting time are retained separately. Complete
 disjoint endpoint inventories can establish an impossible intersection at its
 start. If a log identifies the same attempt, a false prefix at or before its
