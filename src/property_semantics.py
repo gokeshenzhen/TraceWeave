@@ -583,6 +583,16 @@ class Projector:
             return
         r = self.range(rep.range)
         mode = rep.kind.name
+        # These describe one Boolean base occurrence, not the interval of the
+        # whole repeated sequence. Preserve them under an explicit scope.
+        facts = out['facts']
+        base = {key: facts.pop(key) for key in ('match', 'unknown', 'endpoints') if key in facts}
+        if base:
+            facts['base_match'] = dict(scope='one_base_occurrence_before_repetition', **base)
+        out['domain'] = 'sequence'
+        facts.update(match='repetition_of_operand_matches',
+                     endpoints='see_repetition_endpoint_and_zero_count',
+                     match_scope='entire_repeated_sequence')
         out['facts']['repetition'] = dict(kind=mode, count=r,
             empty_match_allowed=r['min']==0,
             empty_interval='zero_ticks; end=start-1; contextual_legality_checked_by_frontend',
@@ -592,9 +602,13 @@ class Projector:
             endpoint={'Consecutive':'end_of_last_repetition', 'GoTo':'last_true_occurrence',
                       'Nonconsecutive':'last_true_occurrence_or_a_later_false_tick_before_next_true'}[mode],
             zero_count=('empty_only' if mode != 'Nonconsecutive' else 'zero_or_more_false_ticks; may_be_empty'))
-        out['explanation'] += f' {mode} repetition keeps the symbolic count range and its endpoint rule.'
+        count = str(r['min']) if r['min'] == r['max'] else f"{r['min']}:{r['max'] if r['max'] is not None else '$'}"
+        out['explanation'] = (f'{mode} repetition applies count {count} to operand matches. '
+                              'The repetition endpoint and zero-count rules describe the whole sequence; '
+                              'base_match describes a single base occurrence.')
         if mode in {'GoTo', 'Nonconsecutive'}:
             out['facts']['repetition'].update(
+                occurrence_selection='count_true_occurrences_in_order_from_this_repetition_start; do_not_skip_earlier_true_occurrences',
                 waiting_bound='unbounded_between_occurrences_even_with_finite_count',
                 finite_window_without_required_occurrences='can_remain_pending; absence_of_match_is_not_automatically_a_failure')
             out['explanation'] += (' The count bounds occurrences, not elapsed clock ticks. '

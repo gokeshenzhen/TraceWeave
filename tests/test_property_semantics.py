@@ -147,6 +147,35 @@ def test_three_repetitions_preserve_endpoint_and_count(rep,kind,endpoint):
     assert fact['count']['min']==2
 
 
+@pytest.mark.parametrize('rep',['[*2:4]','[->3]','[=3]'])
+def test_repetition_scopes_base_truth_separately_from_the_repeated_interval(rep):
+    r=complete('a'+rep)
+    n=node(r,'sample');f=n['facts']
+    assert n['domain']=='sequence'
+    assert f['match_scope']=='entire_repeated_sequence'
+    assert f['endpoints']!='end=start'
+    assert f['base_match']==dict(scope='one_base_occurrence_before_repetition',
+        match='one_tick_when_expression_true',unknown='X_or_Z_boolean_result_is_not_a_match',endpoints='end=start')
+    assert 'one-tick sequence match' not in n['explanation']
+    if rep.startswith(('[->','[=')):
+        assert 'do_not_skip_earlier_true_occurrences' in f['repetition']['occurrence_selection']
+
+
+def test_unrepeated_sample_retains_its_one_tick_contract():
+    f=node(complete('a'),'sample')['facts']
+    assert f['match']=='one_tick_when_expression_true'
+    assert f['endpoints']=='end=start'
+    assert 'base_match' not in f
+
+
+def test_named_sequence_repetition_has_sequence_scope_without_fabricating_a_boolean_base():
+    r=complete('s[*2]',declarations='sequence s; a ##2 b; endsequence')
+    f=node(r,'reference')['facts']
+    assert f['match_scope']=='entire_repeated_sequence'
+    assert 'base_match' not in f
+    assert f['repetition']['count']==dict(min=2,max=2,unbounded=False)
+
+
 def test_empty_match_and_unbounded_count_are_not_flattened():
     r=complete('a |-> b[*0] ##1 c[*1:$]')
     reps=[n['facts']['repetition'] for n in r['nodes'] if 'repetition' in n['facts']]

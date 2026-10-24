@@ -1586,6 +1586,12 @@ operator supplies implication-style vacuity when an operand has no match.
 For goto and nonconsecutive repetition, a finite occurrence count does not bound
 the waiting time between occurrences. A finite run can end with the attempt still
 pending; absence of a match is not automatically a reported assertion failure.
+Repeated nodes use sequence domain and describe the entire repeated interval.
+For a repeated Boolean operand, `base_match` retains the original one-tick truth,
+unknown-value and endpoint rules with explicit single-occurrence scope. Node-level
+`match` / `endpoints` instead refer to repetition and its zero-count rules. Goto
+and nonconsecutive repetition count true occurrences in order from that repetition's
+start; earlier true occurrences cannot be skipped to select a later set.
 
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block
