@@ -96,3 +96,39 @@ def test_oracle_has_disjoint_identified_outcomes():
     assert len(FAIL_NS)+len(PASS)==23
     text=SOURCE.read_text()
     for name in set(FAIL_NS)|PASS:assert name+': assert property' in text
+
+
+@pytest.mark.eda_integration
+@pytest.mark.parametrize('format',['vcd','fsdb','fst'])
+def test_native_first_sample_partial_values_do_not_certify_missing_history(format):
+    from scripts.test_fixtures import current_cache
+    fixture=SOURCE.parent/'partial_values.sv'
+    path=current_cache().vcs_design('property-partial-values',{'oracle.sv':fixture.read_text()},
+                                   'partial_values',simulate=True,kdb=False)
+    waveform={'vcd':lambda:path/'oracle.vcd','fsdb':lambda:fsdb_oracle(path),
+              'fst':lambda:fst_oracle(path)}[format]()
+    events=SimLogParser(str(path/'sim.log'),'vcs').parse_failure_events()
+    observed={e.get('instance_path','').rsplit('.',1)[-1]:e for e in events}
+    decisive={'ap_fell_high','ap_rose_low','ap_mask_zero'}
+    ambiguous={'ap_ambiguous_fell','ap_ambiguous_mask','ap_ambiguous_stable'}
+    assert decisive|ambiguous==set(observed)
+    assert all(observed[n]['time_ps']==5000 for n in observed)
+    async def replay():
+        server.reset_session_state()
+        for name in decisive|ambiguous|{'ap_or_ones'}:
+            explained=await server._dispatch('explain_property',dict(source_file=str(path/'oracle.sv'),
+                target='partial_values.'+name,include_check_plan=True,detail='summary'))
+            plan=explained.results[0].check_plan
+            event=observed.get(name,dict(time_ps=5000,instance_path='partial_values.'+name,
+                structured_fields={'start_time_ps':5000}))
+            result=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],
+                wave_path=str(waveform),failure_event=event))
+            assert result.status==('failure_reproduced' if name in decisive else
+                'insufficient_evidence' if name in ambiguous else 'not_reproduced'),(name,result)
+            assert 'history_before_capture_unavailable' in result.gap_codes
+            if format!='vcd':
+                reference=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],
+                    wave_path=str(path/'oracle.vcd'),failure_event=event))
+                assert result.attempts==reference.attempts
+        server.reset_session_state()
+    asyncio.run(replay())

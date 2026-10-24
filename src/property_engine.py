@@ -133,7 +133,11 @@ class PropertyEngine:
             try:bits=''.join(bits[positions[b]] for b in node.bits)
             except KeyError:return {'value':None}
             return {'value':bits}
-        result=evaluate(expr,sample)
+        result=evaluate(expr,sample,allow_partial_values=True)
+        if result.value is not None and any(d.get('value') is None for d in result.dependencies):
+            # A value may be determined without every input being observed.
+            # Preserve those gaps; the proof does not certify their contents.
+            self.gaps.update(result.gaps)
         if result.value is None:
             self.gaps.update(result.gaps or ['property_value_unavailable'])
             return None
@@ -181,6 +185,8 @@ class PropertyEngine:
                 else:self.gaps.add('history_before_capture_unavailable')
             if missing:self.gaps.add('history_gate_unavailable')
             if name=='$past':result=prior
+            elif name in {'$rose','$fell'} and current is not None and current.bits[-1]!=('1' if name=='$rose' else '0'):
+                result=Value('0')
             elif prior is None or current is None:result=None
             elif name in {'$rose','$fell'}:
                 old,new=prior.bits[-1],current.bits[-1]

@@ -143,6 +143,35 @@ def test_history_observations_use_original_ticks_and_never_invent_missing_sample
     assert 'signal_not_dumped' in missing.gaps
 
 
+@pytest.mark.parametrize('function',['$rose','$fell'])
+@pytest.mark.parametrize('current',['0','1','x','z'])
+def test_current_edge_value_determines_only_history_independent_results(function,current):
+    rows=lambda bits:[dict(data=int(v) if v in '01' else v) for v in bits]
+    engine=make(f'{function}(data)',rows([current]))
+    result=engine.attempt(0)
+    completions=[make(f'{function}(data)',rows([prior,current])).attempt(1)['status'] for prior in '01xz']
+    expected=completions[0] if len(set(completions))==1 else 'unknown'
+    assert result['status']==expected
+    assert 'history_before_capture_unavailable' in engine.gaps
+    assert all(v['time_ps']==5 for v in result['sampled_values'])
+
+
+@pytest.mark.parametrize('text,current,status',[
+    ('~$past(data) & data',0,'false'),
+    ('$past(data) | data',15,'true'),
+    ('$past(data) & data',5,'unknown'),
+    ('$past(data) | data',0,'unknown'),
+])
+def test_controlling_mask_preserves_missing_history_without_fabricating_a_sample(text,current,status):
+    engine=make(text,[dict(data=current)])
+    result=engine.attempt(0)
+    assert result['status']==status
+    assert 'history_before_capture_unavailable' in engine.gaps
+    assert 'property_history_value_unavailable' in engine.gaps
+    assert len(result['sampled_values'])==1
+    assert result['sampled_values'][0]['value']['bin']==format(current,'04b')
+
+
 def test_sample_display_budget_and_prefix_probes_do_not_change_semantics():
     engine=make('a |=> b',[dict(a=1,b=0),dict(a=0,b=1)],max_evidence=1)
     result=engine.attempt(0)

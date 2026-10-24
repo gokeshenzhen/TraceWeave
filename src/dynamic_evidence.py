@@ -167,7 +167,8 @@ class Evaluation:
         return "false" if known(self.value) else "unknown"
 
 
-def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluation:
+def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data", *,
+             allow_partial_values=False) -> Evaluation:
     """Evaluate with conservative four-state logic and retain selected dependencies."""
     budget = MAX_EXPR_NODES
 
@@ -411,6 +412,21 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             if children[0].reference:
                 name, bits = children[0].reference
                 reference = name, tuple(bits[i] for i in node.bits)
+        elif allow_partial_values and node.op in {"&", "|"} and any(v is None for v in values):
+            # A controlling mask determines every output bit for ALL possible
+            # missing values. Never turn absent data into an observed X, or
+            # suppress an unsupported-expression / analysis-limit diagnosis.
+            missing_gaps={"signal_not_dumped", "property_history_value_unavailable",
+                          "property_local_value_unavailable", "value_unknown"}
+            if gaps and set(gaps)<=missing_gaps:
+                common=max(node.width,*(a.width for a in node.args))
+                signed=all(a.signed for a in node.args)
+                controlling="0" if node.op=="&" else "1"
+                for raw,arg in zip(values,node.args):
+                    if raw is None:continue
+                    mask=Value(raw,arg.signed).resize(common,sign_extend=signed).bits[-node.width:]
+                    if mask==controlling*node.width:
+                        value=mask;break
         elif all(v is not None for v in values):
             operands = [Value(v, a.signed) for v, a in zip(values, node.args)]
             if node.op in BINARY:

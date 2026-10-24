@@ -1705,9 +1705,17 @@ samples. Sequence matches retain endpoints and branch-private locals; implicatio
 checks every antecedent match, while consequent alternatives are existential.
 It handles concatenation, bounded and occurrence repetition, first-match ties,
 throughout, intersect/and/within, sampled history and separate asynchronous abort
-timelines. Missing evidence stays distinct from observed X/Z. Decisive-prefix
-probes locate completion before later resets or impossible endpoint joins can
-distort failure time; probes share the request's work/deadline/match budgets.
+timelines. Missing evidence stays distinct from observed X/Z.
+Property values can be determined without unavailable inputs when a fully
+controlling bitwise AND/OR mask fixes every output bit, or a sampled edge
+predicate's current LSB excludes that edge for every prior value. Typed widths
+and signed extension still apply. These rules retain missing-input gap codes,
+never create a historical waveform observation, and do not certify a first-clock
+history origin. Partial bitwise determination is opt-in for property evaluation;
+other dynamic-evidence callers retain their existing behavior. Unsupported
+expressions and analysis limits cannot be suppressed by a controlling mask.
+Decisive-prefix probes locate completion before later resets or impossible endpoint
+joins can distort failure time; probes share the request's work/deadline/match budgets.
 Display trimming does not stop analysis. Default bounds are 200,000 work steps,
 16,384 cumulative matches and 256 evidence rows; cutoff and actual simulation end
 remain separate. This layer performs no waveform I/O or source parsing.

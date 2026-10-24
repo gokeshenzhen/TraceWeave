@@ -28,6 +28,42 @@ def test_four_state_conditions(op, values, expected):
     assert len(result.dependencies) == 2
 
 
+@pytest.mark.parametrize('op,mask,expected',[
+    ('&','0000','0000'),('|','1111','1111'),
+    ('&','0101',None),('|','1010',None),('&','xxxx',None),
+])
+@pytest.mark.parametrize('reverse',[False,True])
+def test_partial_mask_requires_a_value_independent_of_all_missing_bits(op,mask,expected,reverse):
+    args=(signal('missing',4),Expr('const',4,value=mask))
+    if reverse:args=args[::-1]
+    expr=Expr(op,4,args)
+    absent=lambda e:dict(value=None,unavailable_reason='property_history_value_unavailable')
+    assert evaluate(expr,absent).value is None  # Existing callers keep their contract.
+    result=evaluate(expr,absent,allow_partial_values=True)
+    assert result.value==expected
+    assert 'property_history_value_unavailable' in result.gaps
+    assert result.dependencies[0]['value'] is None
+    if expected is not None:
+        # Independently enumerate every four-state completion, not just 0/1.
+        from itertools import product
+        from src.expression_values import Value,binary
+        for bits in product('01xz',repeat=4):
+            values=[Value(''.join(bits)),Value(mask)]
+            if reverse:values.reverse()
+            assert binary(op,*values,width=4).bits==expected
+
+
+def test_partial_masks_respect_signed_extension_and_do_not_hide_unsupported_inputs():
+    missing=signal('missing',8)
+    for signed,expected in [(False,None),(True,'11111111')]:
+        from dataclasses import replace
+        expr=Expr('|',8,(replace(missing,signed=signed),Expr('const',4,value='1111',signed=signed)))
+        assert evaluate(expr,lambda e:dict(value=None),allow_partial_values=True).value==expected
+    bad=Expr('unsupported',4,reason='unmodeled_effect')
+    result=evaluate(Expr('&',4,(bad,Expr('const',4,value='0000'))),lambda e:{},allow_partial_values=True)
+    assert result.value is None and 'unmodeled_effect' in result.gaps
+
+
 def test_inactive_mux_data_is_not_read_but_unknown_condition_keeps_both():
     expr = Expr("mux", 1, (signal("s"), signal("a"), signal("b")))
     for s, expected in (("1", ["s", "a"]), ("0", ["s", "b"]), ("x", ["s", "a", "b"])):
