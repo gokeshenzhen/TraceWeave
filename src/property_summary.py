@@ -38,10 +38,28 @@ def _history_text(call):
     text = f"{name}: {rules[name]}."
     default = call.get('history_default')
     if default:
-        literal = default.get('value', 'the input argument type default')
+        literal = default.get('value')
         arg = call['arguments'][0]
-        text += (f" Before available history use {literal}, from input `{_label(arg['text'],80)}` "
-                 f"of type {arg['type']['name']}; the function return type does not determine this history value.")
+        if literal is not None:
+            text += (f" Before available history use {literal}, the default sampled value of input `{_label(arg['text'],80)}` "
+                 f"of type {arg['type']['name']}, using declaration initializers and component defaults; "
+                 'the function return type does not determine this history value.')
+        else:
+            text += (f" The default sampled value of input `{_label(arg['text'],80)}` is unresolved: "
+                'use declaration initializers and recursive component defaults, not an assumed type-default literal.')
+    first=call.get('first_sample')
+    if first:
+        prior=first['prior_bit']
+        rule={
+            '$rose':('false because the prior LSB is 1' if prior=='1' else 'true exactly when the current LSB is 1'),
+            '$fell':('false because the prior LSB is 0' if prior=='0' else 'true exactly when the current LSB is 0'),
+            '$stable':f'true exactly when ALL current bits are {prior}',
+            '$changed':f'true exactly when NOT ALL current bits are {prior}',
+        }[name]
+        text+=f' At the FIRST sampling event without prior history, {name} is {rule}.'
+        if name in {'$stable','$changed'}:
+            text+=' Compare X/Z as distinct symbols: known 0 versus prior X is different, not an unknown comparison.'
+        text+=' This history rule does not restart at each assertion attempt or waveform window.'
     return text
 
 

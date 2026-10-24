@@ -241,14 +241,16 @@ class Projector:
         if name in sampled:
             row['semantics'] = sampled[name]
             row['history_initialization'] = ('Current sampled value; no prior history is required.' if name == '$sampled' else
-                'Before available history, use the INPUT ARGUMENT expression type default sampled value, not the function return type; no runtime history was read.')
+                'Before available history, use the INPUT EXPRESSION default sampled value from declaration initializers and component defaults, not the function return type; no runtime history was read.')
             if name != '$sampled' and args:
                 typ = args[0].type
-                default = dict(basis='input_argument_type_default_before_available_history', type=type_info(typ),
-                               observation='static_type_default; not_a_runtime_value_or_wave_window_initial_value')
-                if typ.isIntegral and typ.bitWidth <= 4096:
-                    default['value'] = str(typ.defaultValue)
+                from .property_history import sampled_default,first_sample_rules
+                default=sampled_default(self,args[0],clock)
+                default['type']=type_info(typ)
                 row['history_default'] = default
+                first=first_sample_rules(name,default)
+                if first:
+                    row['first_sample']=first
             row['explicit_clock'] = spelling(args[-1]) if args and kind(args[-1]) == 'ClockingEvent' else None
             row['purity'] = 'sampled_value_function'
         elif expr.isSystemCall:
@@ -449,10 +451,26 @@ class Projector:
                     destination_clock=self.leading_clock(consequent),
                     cross_clock_alignment='nearest_strictly_after' if nonoverlap else 'nearest_at_or_after')
                 facts['obligation_scope'] = 'each_antecedent_match_within_one_attempt; activation_is_separate'
+                facts['antecedent_start']='fixed_at_this_implication_start; no_implicit_search_for_later_true_ticks'
                 out['explanation'] = ('Within ONE attempt, every antecedent match creates a separate consequent obligation. '
                     'If the antecedent has no match, the implication succeeds vacuously and creates no consequent obligation. '
                     'Each consequent may choose a successful sequence alternative. On the destination clock, start at the nearest event '
                     + ('strictly after' if nonoverlap else 'at or after') + ' the antecedent endpoint. Attempt activation is separate from these match choices.')
+                ant_sample=self.single_sample(ant)
+                con_sample=self.single_sample(consequent)
+                if ant_sample:
+                    facts['single_sample_antecedent']=dict(node=ant_sample['id'],tick='this_supplied_implication_start',
+                        no_match='vacuous_completion_here; not_waiting_for_a_later_true_antecedent')
+                    out['explanation'] += (' The single-sample antecedent is checked ONLY at this supplied implication start. '
+                        'If its Boolean result is false/X/Z, this implication finishes vacuously here; it does not wait until a later true tick.')
+                    if (not nonoverlap and con_sample and ant_sample['clock'] is not None
+                            and ant_sample['clock']==con_sample['clock']):
+                        facts['single_tick_implication']=dict(clock=ant_sample['clock'],sample_scope='this_supplied_start_only',
+                            true_antecedent='consequent_required_now',false_X_Z_antecedent='vacuous_success_now',
+                            future_ticks='do_not_recheck_this_completed_implication; another_start_requires_separate_activation')
+                        out['explanation'] += (' Both operands are single samples on the SAME clock: if the antecedent is true, '
+                            'check the consequent NOW and finish this implication. Do not scan later ticks for this start; '
+                            'additional starts require separate activation or an enclosing property operator.')
             elif op in {'And', 'Or', 'Intersect', 'Throughout', 'Within'}:
                 resolved, basis = self.operator_domain(expr, domain)
                 seq = resolved == 'sequence' or op in {'Intersect', 'Throughout', 'Within'}
@@ -595,12 +613,26 @@ class Projector:
         if k=='StrongWeak' or (domain=='property' and (out['domain']=='sequence' or out['op']=='sample')):
             from .property_completion import sequence_property_rules
             match_node=(self.result['nodes'][int(out['children'][0][1:])] if k=='StrongWeak' else out)
+            match_node=self.single_sample(match_node) or match_node
             facts['sequence_property']=sequence_property_rules(self.result.get('directive',{}),
                 explicit=out['op'] if k=='StrongWeak' else None,match_node=match_node)
         if (facts.get('repetition', {}).get('empty_match_allowed') or
                 any(c in self.empty_repetition_subtrees for c in out['children'])):
             self.empty_repetition_subtrees.add(out['id'])
         return out
+
+    def single_sample(self, node):
+        """Resolve only transparent clock/reference wrappers with a bounded walk."""
+        for _ in range(self.limits['max_depth']+1):
+            self.charge()
+            if node['facts'].get('repetition') or node['facts'].get('back_to') is not None:
+                return None
+            if node['op']=='sample':
+                return node
+            if node['op'] not in {'clock','reference'} or len(node['children'])!=1:
+                return None
+            node=self.result['nodes'][int(node['children'][0][1:])]
+        return None
 
     def leading_clock(self, node):
         if node['op'] == 'clock':

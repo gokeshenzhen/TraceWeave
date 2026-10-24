@@ -1597,8 +1597,11 @@ Source-linked summaries retain activation scope and clock ownership before the
 operator rules. Repetitions and sampled functions remain semantic entries even
 when their frontend node is a `sample`; negation, abort and property-combination
 rules are also retained. Sampled history defaults refer to the input argument
-type, separately from a function's return type. Integral defaults up to 4,096
-bits are exposed as frontend-derived literals, never observed runtime values.
+expression's declaration initializers and recursive component defaults, separately
+from a function's return type. Pure integral defaults up to 4,096 bits and 256
+expression nodes are folded by the frontend. Calls, effects, mutable initializer
+dependencies and unrepresented forms remain explicitly symbolic; no assumed
+type-default literal replaces an unresolved declaration initializer.
 Summaries contain at most 32 entries and explicitly mark further omitted rules;
 `detail=full` retains the supporting graph. Compact display is not a runtime verdict.
 `directive.activation.schedule` separates leading-clock declarations, procedural
@@ -1627,6 +1630,14 @@ values. Occurrence repetitions retain their distinct ability to wait through
 false gaps. Summaries put these failure conditions before unfinished-at-end
 rules. Whole-property truth maps to check satisfaction/failure only after all
 enclosing operators, separately from disabled and pending attempts.
+Single-sample implication antecedents are anchored to their supplied start;
+false/X/Z completes that implication vacuously instead of waiting for a later
+true tick. Same-clock single-sample `|->` operands finish at that start. Bounded
+clock/reference unwrapping preserves this rule through named definitions, without
+collapsing repetitions or temporal compositions. Sampled-function facts also
+specialize the first event without prior history for uniform integral zero/one/X
+default sampled values. These are symbolic current-value predicates; history does not
+restart at each assertion attempt or arbitrary waveform window.
 
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block

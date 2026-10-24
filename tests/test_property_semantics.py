@@ -344,6 +344,87 @@ def test_check_failure_mapping_is_whole_property_scoped_after_negation():
     assert any('After applying ALL enclosing operators' in s for s in r['summary'])
 
 
+def test_single_tick_implication_does_not_wait_for_a_later_true_antecedent():
+    r=complete('a |-> b')
+    facts=node(r,'OverlappedImplication')['facts']
+    assert facts['single_sample_antecedent']['tick']=='this_supplied_implication_start'
+    assert facts['single_tick_implication']['sample_scope']=='this_supplied_start_only'
+    assert facts['single_tick_implication']['future_ticks'].startswith('do_not_recheck_this_completed_implication')
+    assert any('does not wait until a later true tick' in s for s in r['summary'])
+    assert any('check the consequent NOW and finish' in s for s in r['summary'])
+
+
+def test_single_sample_scope_survives_named_definitions_and_explicit_clocks():
+    r=complete('left_s |-> right_p',declarations='sequence left_s; @(posedge clk) a; endsequence property right_p; @(posedge clk) b; endproperty')
+    assert 'single_tick_implication' in node(r,'OverlappedImplication')['facts']
+    reference=complete('s',declarations='sequence s; a; endsequence')
+    assert node(reference,'reference')['facts']['sequence_property']['match_class']=='required_single_sample'
+
+
+@pytest.mark.parametrize('text',[
+    '(a ##1 b) |-> c','a[->1] |-> b','a |=> b','a |-> @(posedge clk2) b','a |-> not b'])
+def test_temporal_or_cross_clock_implication_is_not_collapsed_to_one_tick(text):
+    r=complete(text)
+    n=next(n for n in r['nodes'] if n['op'].endswith('Implication'))
+    assert 'single_tick_implication' not in n['facts']
+    if text.startswith('(a') or text.startswith('a['):
+        assert 'single_sample_antecedent' not in n['facts']
+
+
+@pytest.mark.parametrize('function,typ,predicate',[
+    ('$rose','logic','current_LSB_is_1'),('$fell','logic','current_LSB_is_0'),
+    ('$stable','logic','all_current_bits_are_X'),('$changed','logic','not_all_current_bits_are_X'),
+    ('$rose','bit','current_LSB_is_1'),('$fell','bit','always_false_with_prior_0'),
+    ('$stable','bit','all_current_bits_are_0'),('$changed','bit','not_all_current_bits_are_0')])
+def test_first_sampling_rules_use_symbolic_input_defaults_without_reading_runtime(function,typ,predicate):
+    r=complete(function+'(input_value)',declarations=typ+' [3:0] input_value;')
+    call=node(r,'sample')['facts']['expression']['calls'][0]
+    first=call['first_sample']
+    assert first['true_iff']==predicate
+    assert first['runtime_value']=='not_evaluated'
+    assert 'not_each_attempt_or_wave_window_start' in first['scope']
+    assert any('FIRST sampling event without prior history' in s for s in r['summary'])
+    if function in {'$stable','$changed'}:
+        assert any('different, not an unknown comparison' in s for s in r['summary'])
+
+
+def test_first_sample_specialization_keeps_mixed_or_missing_defaults_unresolved():
+    from src.property_history import first_sample_rules
+    for value in ['',"4'bxx00","8'hf0",'named_default',"4'b1","32'd11","4'h1"]:
+        assert first_sample_rules('$fell',{'value':value}) is None
+    assert first_sample_rules('$past',{'value':"1'bx"}) is None
+
+
+@pytest.mark.parametrize('expression,declarations,value',[
+    ('initialized','logic initialized=0;',"1'b0"),
+    ('initialized','logic initialized=1;',"1'b1"),
+    ('a === b','',"1'b1"),
+    ('a !== b','',"1'b0"),
+    ('1\'b1','',"1'b1"),
+    ('!initialized','logic initialized=0;',"1'b1")])
+def test_default_sampled_value_uses_initializers_and_recursive_expression_defaults(expression,declarations,value):
+    r=complete('$changed('+expression+')',declarations=declarations)
+    default=node(r,'sample')['facts']['expression']['calls'][0]['history_default']
+    assert default['status']=='resolved'
+    assert default['value']==value
+    assert 'declaration initializers and component defaults' in ' '.join(r['summary'])
+
+
+def test_nonconstant_static_initializer_is_not_replaced_by_a_type_default():
+    r=complete('$fell(initialized)',declarations='logic initialized=a;')
+    call=node(r,'sample')['facts']['expression']['calls'][0]
+    assert call['history_default']['status']=='symbolic'
+    assert call['history_default']['unresolved_reason']=='static_initializer_not_a_bounded_constant'
+    assert 'value' not in call['history_default'] and 'first_sample' not in call
+    assert any('default sampled value' in s and 'unresolved' in s for s in r['summary'])
+
+
+def test_history_default_folding_does_not_invoke_initializer_functions():
+    r=complete('$fell(initialized)',declarations='function automatic logic init_fn(); return 0; endfunction logic initialized=init_fn();')
+    default=node(r,'sample')['facts']['expression']['calls'][0]['history_default']
+    assert default['status']=='symbolic' and 'value' not in default
+
+
 def test_sequence_cover_and_immediate_assertions_do_not_claim_sequence_property_default_strength():
     cover=complete('cover sequence(a ##1 b);')
     immediate=complete('assert(a);')
