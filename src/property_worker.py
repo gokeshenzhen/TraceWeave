@@ -103,9 +103,16 @@ def _collect(root, projector, *, collect_controls=True):
                 if collect_controls and isinstance(s,ast.CallExpression) and str(s.subroutineName).startswith('$assert'):
                     projector.effects(s,'procedural_assertion_control',
                         'when_enclosing_procedure_reaches_call; execution_and_enabled_state_not_observed',None)
+                # Assertions are statements. Ordinary expression trees cannot
+                # contain another assertion site; bound property/value trees
+                # are projected only after the selected site is resolved.
+                if isinstance(s,ast.Expression):return ast.VisitAction.Skip
             n.body.visit(statements)
             return ast.VisitAction.Skip
-        if isinstance(n,ast.AssertionInstanceExpression):
+        # Procedure bodies were handled above. Do not walk unrelated task/
+        # function statement trees or variable initializer expressions while
+        # discovering declaration and directive symbols across the hierarchy.
+        if isinstance(n,(ast.Statement,ast.Expression)):
             return ast.VisitAction.Skip
     root.visit(visit)
     return candidates

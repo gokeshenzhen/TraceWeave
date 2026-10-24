@@ -1708,6 +1708,13 @@ Display trimming does not stop analysis. Default bounds are 200,000 work steps,
 16,384 cumulative matches and 256 evidence rows; cutoff and actual simulation end
 remain separate. This layer performs no waveform I/O or source parsing.
 
+Property target discovery walks declaration symbols and assertion-containing
+procedure statements. It skips unrelated initializer/value trees and subroutine
+statement bodies; selected property expressions are projected separately under
+the same visit/depth/time bounds. Procedural assertion-control calls remain
+explicit source effects. A large unrelated driver does not consume the selected
+property's graph budget merely because it shares the source file.
+
 `verify_window(mode="property")` executes a registered `property_plan` handle
 against VCD/FSDB/FST. Supply `log_path` to select the first failure of the exact source
 directive instance, a normalized `failure_event`, or a `failure_time_ps` TimeSpec.

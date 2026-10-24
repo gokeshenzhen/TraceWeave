@@ -45,6 +45,26 @@ def test_fragment_source_lines_and_columns_refer_to_caller_text():
         ('input',1,1),('input',2,3)]
 
 
+def test_target_discovery_skips_unrelated_task_and_value_trees():
+    # The selected property needs only a few nodes. A large testbench driver
+    # must not consume its projection budget while discovering assertion sites.
+    assignments='\n'.join(f'data={i};' for i in range(5000))
+    source=('module top; logic clk,a,b; int data;\n'
+            'task drive; begin\n'+assignments+'\nend endtask\n'
+            'initial begin drive(); $assertoff; $asserton; ap: assert property(@(posedge clk) a |=> b); end\n'
+            'endmodule')
+    result=explain_text(source,item=dict(id='large',text=source,target='top.ap',arguments=[]),
+        limits=dict(max_nodes=64,max_depth=64),execution_plan=True)
+    assert result['semantic_status']=='complete',result['gaps']
+    assert result['target']['path']=='top.ap'
+    assert node(result,'NonOverlappedImplication')
+    controls=[e for e in result['effects'] if e.get('phase')=='procedural_assertion_control']
+    assert len(controls)==2,result['effects']
+    from src.property_plan import prepare_plan
+    plan,gaps=prepare_plan(result)
+    assert plan is not None and not gaps,gaps
+
+
 def test_first_match_is_operand_local_and_retains_tied_branches():
     r=complete('first_match((a ##[1:3] b) or (a ##1 c)) |-> b')
     f=node(r,'first_match')['facts']
