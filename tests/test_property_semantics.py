@@ -168,6 +168,66 @@ def test_unrepeated_sample_retains_its_one_tick_contract():
     assert 'base_match' not in f
 
 
+@pytest.mark.parametrize('rep',['[->3]','[=3]'])
+def test_summary_keeps_repetition_even_under_a_concat_operator(rep):
+    r=complete('a'+rep+' ##1 b')
+    repeated=node(r,'sample')
+    line=next(s for s in r['summary'] if s.startswith('['+repeated['id']+']'))
+    assert 'count 3' in line
+    assert 'do not skip earlier true occurrences' in line
+    assert 'finite simulation end' in line
+
+
+def test_summary_keeps_negation_and_scopes_it_to_the_same_start():
+    r=complete('not (a ##1 b)')
+    n=node(r,'Not')
+    line=next(s for s in r['summary'] if s.startswith('['+n['id']+']'))
+    assert 'Negate' in line and 'THIS same start' in line
+
+
+@pytest.mark.parametrize('function',['$fell','$stable','$changed'])
+def test_summary_exposes_input_history_default_instead_of_boolean_return_default(function):
+    r=complete(function+'(a)')
+    call=node(r,'sample')['facts']['expression']['calls'][0]
+    assert call['return_type']['four_state'] is False
+    assert call['history_default']['type']['four_state'] is True
+    assert call['history_default']['value']=="1'bx"
+    line=next(s for s in r['summary'] if function+':' in s)
+    assert "1'bx" in line and 'input `a`' in line
+    assert 'return type does not determine' in line
+    if function=='$fell':assert 'was 1, X or Z' in line
+
+
+def test_sampled_current_value_does_not_fabricate_a_history_requirement():
+    r=complete('$sampled(a)')
+    call=node(r,'sample')['facts']['expression']['calls'][0]
+    assert 'history_default' not in call
+    assert any('no prior history is required' in s for s in r['summary'])
+
+
+def test_two_state_and_vector_history_defaults_follow_the_frontend_input_type():
+    bit=complete('$stable(two)',declarations='bit two;')
+    vector=complete('$fell(data)')
+    assert node(bit,'sample')['facts']['expression']['calls'][0]['history_default']['value']=="1'b0"
+    assert node(vector,'sample')['facts']['expression']['calls'][0]['history_default']['value']=="4'bxxxx"
+
+
+def test_summary_distinguishes_initial_activation_from_concurrent_declaration():
+    initial=complete('module m; logic clk,a,b; initial begin ap: assert property(@(posedge clk) a |-> b); end endmodule')
+    concurrent=complete('module m; logic clk,a,b; ap: assert property(@(posedge clk) a |-> b); endmodule')
+    assert any('InitialBlock' in s and 'do not themselves start fresh' in s for s in initial['summary'])
+    assert any('new attempt at each leading clock event' in s for s in concurrent['summary'])
+    assert any('Within ONE attempt' in s for s in initial['summary'])
+
+
+def test_summary_bounds_are_explicit_when_more_semantic_entries_exist():
+    from src.property_summary import summarize_property
+    r=complete('(a |-> b) and (b |-> c)')
+    summary=summarize_property(r,max_lines=3)
+    assert len(summary)==3
+    assert 'Additional semantic entries omitted' in summary[-1]
+
+
 def test_named_sequence_repetition_has_sequence_scope_without_fabricating_a_boolean_base():
     r=complete('s[*2]',declarations='sequence s; a ##2 b; endsequence')
     f=node(r,'reference')['facts']

@@ -215,6 +215,19 @@ async def test_summary_mode_retains_concrete_alignment_rule_after_graph_is_omitt
 
 
 @pytest.mark.anyio
+async def test_summary_mode_retains_repetition_negation_and_sampled_history_without_nodes():
+    pytest.importorskip('pyslang')
+    r=await run({'text':'not (a[->3] ##1 $fell(b))','unit':'u',
+                 'units':[{**UNIT,'declarations':'logic clk,a,b;'}],'detail':'summary'})
+    item=r.results[0]
+    assert item.semantic_status=='complete'
+    assert item.output_truncated and item.nodes==[]
+    assert any('Negate' in s for s in item.summary)
+    assert any('count 3' in s for s in item.summary)
+    assert any("1'bx" in s and '$fell:' in s for s in item.summary)
+
+
+@pytest.mark.anyio
 async def test_source_binding_and_changed_input_do_not_advance_fallback(tmp_path,monkeypatch):
     pytest.importorskip('pyslang')
     source=tmp_path/'top.sv';source.write_text('module top; bit clk,a,b; ap: assert property(@(posedge clk) a |=> b); endmodule')

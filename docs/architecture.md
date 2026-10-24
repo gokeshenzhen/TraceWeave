@@ -1593,6 +1593,15 @@ unknown-value and endpoint rules with explicit single-occurrence scope. Node-lev
 and nonconsecutive repetition count true occurrences in order from that repetition's
 start; earlier true occurrences cannot be skipped to select a later set.
 
+Source-linked summaries retain activation scope and clock ownership before the
+operator rules. Repetitions and sampled functions remain semantic entries even
+when their frontend node is a `sample`; negation, abort and property-combination
+rules are also retained. Sampled history defaults refer to the input argument
+type, separately from a function's return type. Integral defaults up to 4,096
+bits are exposed as frontend-derived literals, never observed runtime values.
+Summaries contain at most 32 entries and explicitly mark further omitted rules;
+`detail=full` retains the supporting graph. Compact display is not a runtime verdict.
+
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block
 flow are retained. Local sequence input/inout ports copy in at entry; whole-variable

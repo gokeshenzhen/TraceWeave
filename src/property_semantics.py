@@ -113,12 +113,8 @@ class Projector:
         return '`' + (text[:160] + '...' if len(text) > 160 else text) + '`'
 
     def summary(self):
-        """Prioritize source-linked operator rules over repeated value boilerplate."""
-        nodes = [n for n in self.result['nodes'] if n['explanation']]
-        operators = [n for n in nodes if n['op'] not in {'sample', 'clock', 'reference'}]
-        selected = operators or nodes
-        return [f"[{n['id']}] {self.operand_label_text(n['source'].get('text', ''))}: {n['explanation']}"
-                for n in selected[:12]]
+        from .property_summary import summarize_property
+        return summarize_property(self.result)
 
     @staticmethod
     def operand_label_text(text):
@@ -244,7 +240,15 @@ class Projector:
         }
         if name in sampled:
             row['semantics'] = sampled[name]
-            row['history_initialization'] = 'Before available history, use the expression type default sampled value; no runtime history was read.'
+            row['history_initialization'] = ('Current sampled value; no prior history is required.' if name == '$sampled' else
+                'Before available history, use the INPUT ARGUMENT expression type default sampled value, not the function return type; no runtime history was read.')
+            if name != '$sampled' and args:
+                typ = args[0].type
+                default = dict(basis='input_argument_type_default_before_available_history', type=type_info(typ),
+                               observation='static_type_default; not_a_runtime_value_or_wave_window_initial_value')
+                if typ.isIntegral and typ.bitWidth <= 4096:
+                    default['value'] = str(typ.defaultValue)
+                row['history_default'] = default
             row['explicit_clock'] = spelling(args[-1]) if args and kind(args[-1]) == 'ClockingEvent' else None
             row['purity'] = 'sampled_value_function'
         elif expr.isSystemCall:
@@ -444,9 +448,11 @@ class Projector:
                     start_relation='next_tick_after_antecedent_end' if nonoverlap else 'antecedent_end_tick',
                     destination_clock=self.leading_clock(consequent),
                     cross_clock_alignment='nearest_strictly_after' if nonoverlap else 'nearest_at_or_after')
-                out['explanation'] = ('Every antecedent match creates a separate consequent obligation. '
+                facts['obligation_scope'] = 'each_antecedent_match_within_one_attempt; activation_is_separate'
+                out['explanation'] = ('Within ONE attempt, every antecedent match creates a separate consequent obligation. '
                     'If the antecedent has no match, the implication succeeds vacuously and creates no consequent obligation. '
-                    'Each consequent may choose a successful sequence alternative.')
+                    'Each consequent may choose a successful sequence alternative. On the destination clock, start at the nearest event '
+                    + ('strictly after' if nonoverlap else 'at or after') + ' the antecedent endpoint. Attempt activation is separate from these match choices.')
             elif op in {'And', 'Or', 'Intersect', 'Throughout', 'Within'}:
                 resolved, basis = self.operator_domain(expr, domain)
                 seq = resolved == 'sequence' or op in {'Intersect', 'Throughout', 'Within'}
@@ -493,10 +499,15 @@ class Projector:
                 child(expr.left, 'property'); child(expr.right, 'property')
                 facts.update(truth_rule='equivalent_truth' if op == 'Iff' else 'not_left_or_right',
                              timing='both_properties_start_here; not_sequence_implication')
+                out['explanation'] = ('Both properties start here; combine their property truth using '
+                    + ('equivalence.' if op == 'Iff' else 'not-left or right.'))
             elif op in {'Until','SUntil','UntilWith','SUntilWith'}:
                 child(expr.left, 'property'); child(expr.right, 'property')
                 facts.update(left_required='through_right_success_tick' if op.endswith('With') else 'before_right_success_tick',
                              right_eventually_required=op.startswith('S'), start_relation='same_start')
+                out['explanation'] = ('From this start, require the left property '
+                    + ('through' if op.endswith('With') else 'before') + ' the right-success tick. '
+                    + ('Right success must eventually occur.' if op.startswith('S') else 'The weak form does not require eventual right success.'))
             else:
                 child(expr.left); child(expr.right)
                 self.missing('binary_operator_semantics', 'unsupported', f'No semantic rule for {op}.', expr)
@@ -514,6 +525,10 @@ class Projector:
                 phase = 'reactive_subroutine_call' if kind(item) == 'Call' else 'observed_local_assignment'
                 facts['match_items'].extend(self.effects(item, phase, f'on_match({target["id"]})', clock, depth+1))
             if k == 'SequenceWithMatch':
+                if facts['match_items']:
+                    out['explanation'] = ('Apply the recorded match-item effects on successful operand matches, in their recorded phases; '
+                        'each matching branch keeps its local values. Effects: '
+                        + '; '.join(self.operand_label_text(e['source'].get('text', '')) for e in facts['match_items'][:4]))
                 self.repetition(expr.repetition, out)
         elif k == 'DisableIff':
             out['op'] = 'disable_iff'
@@ -521,13 +536,17 @@ class Projector:
                 sampling='asynchronous_unsampled_condition; sampled_functions_keep_their_own_sampling',
                 outcome='disabled_attempt_neither_passes_nor_fails', affects='active_and_new_attempts')
             child(expr.expr)
-            out['explanation'] = 'A true disable condition aborts the attempt asynchronously; this is distinct from failure, vacuity and an unfinished check.'
+            out['explanation'] = ('When the disable condition evaluates true (Boolean 1), abort the attempt asynchronously. '
+                                  'A false condition permits checking; disabled is separate from failure, vacuity and unfinished checks.')
         elif k == 'Abort':
             out['op'] = ('sync_' if expr.isSync else '') + expr.action.name.lower() + '_on'
             facts.update(condition=self.value(expr.condition, clock, depth+1),
                          sampling='sampled_on_clock' if expr.isSync else 'asynchronous',
                          outcome='success' if expr.action.name == 'Accept' else 'failure')
             child(expr.expr)
+            out['explanation'] = ('When the condition is true, '
+                + ('synchronously ' if expr.isSync else 'asynchronously ')
+                + ('accept' if expr.action.name == 'Accept' else 'reject') + ' the contained attempt; otherwise continue evaluating it.')
         elif k == 'StrongWeak':
             out['op'] = expr.strength.name.lower()
             child(expr.expr, 'sequence')
@@ -557,6 +576,16 @@ class Projector:
                                'SEventually':'eventual_completion_required'}.get(expr.op.name))
             if facts['rule'] is None:
                 self.missing('unary_operator_semantics','unsupported','Unary operator rule is unavailable.',expr)
+            else:
+                out['explanation'] = ({
+                    'Not': 'Negate the contained property truth for THIS same start; preserve its temporal matching and completion rules.',
+                    'NextTime': 'Evaluate the property at the recorded later sampling tick; this is weak nexttime.',
+                    'SNextTime': 'Evaluate the property at the recorded later sampling tick; this is strong nexttime.',
+                    'Always': 'Require the property at every tick in the recorded range.',
+                    'SAlways': 'Require the property at every tick in the recorded finite range with strong completion.',
+                    'Eventually': 'Require a property success at some tick in the recorded finite range.',
+                    'SEventually': 'Require eventual property success with strong completion.',
+                }[expr.op.name] + (' Range: ' + str(facts['range']) + '.' if facts['range'] else ''))
         else:
             out['domain'] = 'unresolved'
             self.missing('invalid_assertion' if k=='Invalid' else 'assertion_projection_unsupported',
@@ -612,7 +641,10 @@ class Projector:
                 waiting_bound='unbounded_between_occurrences_even_with_finite_count',
                 finite_window_without_required_occurrences='can_remain_pending; absence_of_match_is_not_automatically_a_failure')
             out['explanation'] += (' The count bounds occurrences, not elapsed clock ticks. '
-                                   'Waiting for occurrences can remain pending at a finite simulation end.')
+                'Count true occurrences in order from this repetition start; do not skip earlier true occurrences. '
+                + ('The match ends at the selected count\'s last true occurrence.' if mode == 'GoTo' else
+                   'The match may end at that last true occurrence or a later false tick before the next true occurrence.')
+                + ' Waiting for occurrences can remain pending at a finite simulation end.')
 
     def check_local_flow(self, root):
         """Must-defined local values across sequence alternatives, not live signals.
