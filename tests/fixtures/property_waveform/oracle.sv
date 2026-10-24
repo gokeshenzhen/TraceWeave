@@ -44,6 +44,9 @@ module property_oracle;
   ap_past: assert property (@(posedge clk) (phase==4) |-> data==$past(data,2,gate));
   ap_reset: assert property (@(posedge clk) disable iff(rst) go |=> never_ack);
   ap_sampled_reset: assert property (@(posedge clk) disable iff($sampled(rst)) go |=> never_ack);
+  ap_until_right_pass: assert property (@(posedge clk) go |-> (never_ack until (go |=> b)));
+  ap_until_right_fail: assert property (@(posedge clk) go |-> (never_ack until (go |=> c)));
+  ap_until_left_fail: assert property (@(posedge clk) go |-> ((go |=> never_ack) until b));
 
   property tied;
     logic [3:0] v;

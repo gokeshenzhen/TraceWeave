@@ -15,8 +15,10 @@ FAIL_NS={
     'ap_exact':35,'ap_all':35,'ap_throughout':15,'ap_intersect':5,
     'ap_within_bad':35,'ap_repeat':15,'ap_occurrence':35,'ap_preponed':5,
     'ap_x':5,'ap_stable':15,'ap_past':45,'ap_tied':25,
+    'ap_until_right_fail':15,'ap_until_left_fail':15,
 }
-PASS={'ap_range','ap_first','ap_and','ap_within','ap_empty','ap_case','ap_reset','ap_sampled_reset'}
+PASS={'ap_range','ap_first','ap_and','ap_within','ap_empty','ap_case','ap_reset','ap_sampled_reset',
+      'ap_until_right_pass'}
 
 
 def build_oracle():
@@ -74,6 +76,6 @@ def test_vcs_native_outcomes_replay_over_waveform(format):
 
 def test_oracle_has_disjoint_identified_outcomes():
     assert not set(FAIL_NS)&PASS
-    assert len(FAIL_NS)+len(PASS)==20
+    assert len(FAIL_NS)+len(PASS)==23
     text=SOURCE.read_text()
     for name in set(FAIL_NS)|PASS:assert name+': assert property' in text

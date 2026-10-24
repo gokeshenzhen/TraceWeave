@@ -515,15 +515,26 @@ class PropertyEngine:
 
     def _until(self,n,start,env):
         left,right=n['children'];inclusive=n['op'].endswith('With')
-        unknown=False
+        prefix=Outcome('true',start,n['id'])
+        choices=Outcome('false',start,n['id'])
         for tick in range(start,self.n):
             b=self.property(right,tick,env)
-            if b.status=='true' and not inclusive:return replace(b,node=n['id'])
             a=self.property(left,tick,env)
-            if a.status=='false':return Outcome('unknown',node=n['id']) if unknown else replace(a,node=n['id'])
-            unknown|=a.status in {'unknown','pending'} or b.status in {'unknown','pending'}
-            if b.status=='true':return Outcome('unknown' if unknown else 'true',self._latest(a.end,b.end),n['id'])
-        return Outcome('unknown' if unknown else 'pending',node=n['id'])
+            if a.status=='disabled' or b.status=='disabled':
+                self.gaps.add('until_disabled_operand_unresolved')
+                a=replace(a,status='unknown') if a.status=='disabled' else a
+                b=replace(b,status='unknown') if b.status=='disabled' else b
+            # Each possible right-hand start is one alternative. All preceding
+            # left properties are obligations, including any delayed endpoints.
+            required=self._boolean('And',prefix,a,n['id'])
+            candidate=self._boolean('And',required if inclusive else prefix,b,n['id'])
+            choices=self._boolean('Or',choices,candidate,n['id'])
+            if choices.status=='true':return choices
+            prefix=required
+            if prefix.status=='false':
+                if choices.status=='false':return replace(choices,end=self._latest(choices.end,prefix.end))
+                return choices
+        return Outcome('unknown' if choices.status=='unknown' or prefix.status=='unknown' else 'pending',node=n['id'])
 
     def _abort(self,n,start,env,result):
         if start>=self.n:return result

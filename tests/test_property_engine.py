@@ -138,6 +138,26 @@ def test_unobserved_async_control_never_uses_only_clock_samples():
     assert r['status']=='unknown'
 
 
+@pytest.mark.parametrize('op',['until','s_until'])
+def test_until_waits_for_temporal_operands(op):
+    rows=[dict(a=0,b=1,c=0),dict(a=0,b=0,c=1)]
+    assert make(f'a {op} (b |=> c)',rows[:1]).attempt(0)['status']=='pending'
+    success=make(f'a {op} (b |=> c)',rows).attempt(0)
+    assert (success['status'],success['end_index'])==('true',1)
+    failure=make(f'a {op} (b |=> c)',[dict(a=0,b=1,c=0),dict(a=0,b=0,c=0)]).attempt(0)
+    assert (failure['status'],failure['end_index'])==('false',1)
+    # A later right-hand success does not erase an earlier left obligation.
+    failure=make(f'(b |=> a) {op} c',[dict(a=0,b=1,c=0),dict(a=0,b=0,c=1)]).attempt(0)
+    assert (failure['status'],failure['end_index'])==('false',1)
+
+
+@pytest.mark.parametrize('op',['until_with','s_until_with'])
+def test_inclusive_until_requires_left_at_the_right_start(op):
+    rows=[dict(a=0,b=1,c=0),dict(a=0,b=0,c=1)]
+    failure=make(f'a {op} (b |=> c)',rows).attempt(0)
+    assert (failure['status'],failure['end_index'])==('false',0)
+
+
 def test_limits_and_display_trimming_do_not_create_passes():
     rows=[dict(a=1,b=1,c=1)]*8
     engine=make('(a ##[1:7] b) |=> c',rows,max_work=20)
