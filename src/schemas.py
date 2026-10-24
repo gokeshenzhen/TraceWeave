@@ -2705,6 +2705,12 @@ class VerifyEvidence(SchemaModel):
 
 
 class WindowVerifyResult(SchemaModel):
+    sample_phase: Literal["before", "after"] = "after"
+    sample_offset_ps: int | None = None
+    response_min_cycles: int | None = None
+    response_max_cycles: int | None = None
+    attempt_start_indices: list[int] | None = None
+    attempts_evaluated: int = 0
     selections: list[WaveformSelectionReceipt] = Field(default_factory=list)
     expressions: list[WaveformExpressionReceipt] = Field(default_factory=list)
     transition_data_truncated: bool = False

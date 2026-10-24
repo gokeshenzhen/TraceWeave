@@ -76,8 +76,13 @@ def verify_window(
     antecedent: list[dict] | None = None,
     consequent: list[dict] | None = None,
     delta: dict | None = None,
-    within_cycles: int = 1,
-    overlap: bool = True,
+    within_cycles: int | None = None,
+    overlap: bool | None = None,
+    response_min_cycles: int | None = None,
+    response_max_cycles: int | None = None,
+    attempt_start_indices: list[int] | None = None,
+    sample_phase: str = "after",
+    sample_offset_ps: int | None = None,
     edge: str = "posedge",
     start_ps: int = 0,
     end_ps: int = -1,
@@ -93,8 +98,14 @@ def verify_window(
         "mode": mode,
         "start_ps": int(start_ps),
         "end_ps": int(end_ps),
-        "within_cycles": int(within_cycles) if mode == "implication" else None,
-        "overlap": bool(overlap) if mode == "implication" else None,
+        "within_cycles": None,
+        "overlap": None,
+        "response_min_cycles": None,
+        "response_max_cycles": None,
+        "attempt_start_indices": attempt_start_indices,
+        "attempts_evaluated": 0,
+        "sample_phase": sample_phase,
+        "sample_offset_ps": sample_offset_ps,
         "signals": [],
         "holds": False,
         "vacuous": False,
@@ -119,7 +130,39 @@ def verify_window(
     if mode not in _MODES:
         result["reason"] = f"mode must be one of {_MODES}, got {mode!r}"
         return result
+    if sample_offset_ps is None:
+        sample_offset_ps = 0 if sample_phase == "before" else 1
+    if (sample_phase not in {"before", "after"} or type(sample_offset_ps) is not int
+            or sample_offset_ps < 0 or (sample_phase == "before" and sample_offset_ps)):
+        result["reason"] = "before sampling requires zero offset; phase must be before or after"
+        return result
+    result["sample_offset_ps"] = sample_offset_ps
+    ranged = response_min_cycles is not None or response_max_cycles is not None
+    if (ranged or attempt_start_indices is not None) and mode != "implication":
+        result["reason"] = "response ranges and attempt_start_indices require implication mode"
+        return result
+    if attempt_start_indices is not None and (
+            not isinstance(attempt_start_indices, list) or not 1 <= len(attempt_start_indices) <= 4096
+            or any(type(i) is not int or i < 0 for i in attempt_start_indices)
+            or len(set(attempt_start_indices)) != len(attempt_start_indices)):
+        result["reason"] = "attempt_start_indices must contain 1..4096 distinct nonnegative integers"
+        return result
+    if ranged:
+        if within_cycles is not None or overlap is not None:
+            result["reason"] = "response_min/max_cycles cannot be combined with within_cycles or overlap"
+            return result
+        if (type(response_min_cycles) is not int or type(response_max_cycles) is not int
+                or not 0 <= response_min_cycles <= response_max_cycles <= 1_000_000):
+            result["reason"] = "response range requires 0 <= min <= max <= 1000000"
+            return result
+    within_cycles = 1 if within_cycles is None else within_cycles
+    overlap = True if overlap is None else overlap
     if mode == "implication":
+        if not ranged:
+            response_min_cycles = 0 if overlap else 1
+            response_max_cycles = within_cycles
+            result.update(within_cycles=within_cycles, overlap=overlap)
+        result.update(response_min_cycles=response_min_cycles, response_max_cycles=response_max_cycles)
         terms_sets = {"antecedent": antecedent, "consequent": consequent}
         if predicate:
             result["reason"] = "implication uses antecedent + consequent, not predicate"
@@ -177,6 +220,7 @@ def verify_window(
 
     sampled = sample_signals_on_edges(
         parser, clock, resolved_signals, start_ps=start_ps, end_ps=end_ps, edge=edge,
+        sample_phase=sample_phase, sample_offset_ps=sample_offset_ps,
     )
     result['transition_data_truncated'] = bool(sampled.get('transition_data_truncated'))
     result['coverage_status'] = 'partial' if result['transition_data_truncated'] else 'complete'
@@ -198,6 +242,10 @@ def verify_window(
             f"no {edge} edges of clock {clock!r} in the window — nothing to evaluate"
         )
         return result
+    if attempt_start_indices is not None and max(attempt_start_indices) >= len(samples):
+        result["coverage_status"] = "zero_coverage"
+        result["reason"] = "attempt_start_indices refers outside the sampled edge sequence"
+        return result
 
     # Rewrite term signal paths to their resolved form so eval keys match samples.
     def _resolve_set(terms: list[dict]) -> list[dict]:
@@ -207,6 +255,8 @@ def verify_window(
         _eval_implication(
             result, samples, _resolve_set(antecedent), _resolve_set(consequent),
             within_cycles, overlap,
+            response_min_cycles=response_min_cycles, response_max_cycles=response_max_cycles,
+            attempt_start_indices=attempt_start_indices, legacy_timing=not ranged,
         )
     elif mode == "sequence":
         _eval_sequence(result, samples, _resolve_set(predicate), _resolve_delta(delta, sig_map))
@@ -277,6 +327,8 @@ def _eval_simple(result: dict, samples: list[dict], mode: str, terms: list[dict]
 def _eval_implication(
     result: dict, samples: list[dict], antecedent: list[dict],
     consequent: list[dict], within: int, overlap: bool = True,
+    *, response_min_cycles=None, response_max_cycles=None,
+    attempt_start_indices=None, legacy_timing=True,
 ) -> None:
     """Overlapping (`|->`, default) vs non-overlapping (`|=>`, overlap=False).
 
@@ -294,8 +346,13 @@ def _eval_implication(
     inconclusive = 0
     responded_same = 0  # satisfied on the antecedent's OWN cycle (overlap only)
     first_violation: dict | None = None
-    for i, s in enumerate(samples):
-        if not i % CANCEL_CHECK_STRIDE:
+    indices = range(n) if attempt_start_indices is None else sorted(attempt_start_indices)
+    result["attempts_evaluated"] = len(indices)
+    minimum = (0 if overlap else 1) if response_min_cycles is None else response_min_cycles
+    maximum = within if response_max_cycles is None else response_max_cycles
+    for attempt, i in enumerate(indices):
+        s = samples[i]
+        if not attempt % CANCEL_CHECK_STRIDE:
             check_cancelled()
         a = _eval_predicate(antecedent, s["signals"])
         if a is None:
@@ -304,11 +361,13 @@ def _eval_implication(
         if not a:
             continue
         ant_count += 1
-        start = i if overlap else i + 1  # non-overlapping starts next cycle
-        last = i + within  # inclusive response window end
+        start = i + minimum
+        last = i + maximum
         found = False
         response_unknown = False
         for j in range(start, min(last, n - 1) + 1):
+            if not j % CANCEL_CHECK_STRIDE:
+                check_cancelled()
             response = _eval_predicate(consequent, samples[j]["signals"])
             if response is None:
                 response_unknown = True
@@ -343,7 +402,7 @@ def _eval_implication(
     # Surface it so the verdict is not misread as exclusion evidence; the fix is
     # overlap=false.
     result["vacuous"] = bool(
-        overlap and within >= 1 and ant_count > 0 and responded_same == ant_count
+        legacy_timing and overlap and within >= 1 and ant_count > 0 and responded_same == ant_count
     )
 
 

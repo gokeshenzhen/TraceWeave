@@ -227,6 +227,15 @@ part-select 宽度、复制次数、streaming slice size 必须是合法常量�
 保留模板、vacuous 和窗口末端不确定性。未知后件会记为 inconclusive；
 不能用 partial coverage 下的 `holds=true` 排除问题。
 
+窗口工具默认仍为每沿检查、沿后 1ps 采样。可显式设置 `sample_phase="before"`，
+此时默认偏移为 0，且只允许零偏移；读取严格物理沿前的值，不包含同时间戳更新。
+这不自动证明与所有 SVA 调度区等价。`sample_offset_ps` 可调整沿后偏移。
+implication 可用 `response_min_cycles` / `response_max_cycles` 指定相对单拍前件端点的
+闭区间，两者相等表示精确延迟；须成对提供，不能与显式 `within_cycles` / `overlap`
+混用。`attempt_start_indices` 选择当前采样序列中最多 4,096 个不同的零起始边沿索引；
+其余边沿仍可作为响应证据，越界索引拒绝执行。省略时维持每沿检查。
+新增范围上界为 1,000,000 拍；结果回传实际范围、采样设置和 `attempts_evaluated`。
+
 协议工具维持原采样相位（事务/TL-UL 为严格边沿前），不把派生数据归给一个虚构驱动。
 违规使用 `violating_expression` / `expression_key` 并列出真实依赖后续动作。
 clock/valid/ready/reset 要求一 bit，`valid_htrans` 要求两 bit。

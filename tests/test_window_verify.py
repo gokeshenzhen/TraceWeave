@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import itertools
 from pathlib import Path
+import pytest
 
 from src.cursor_store import CursorStore
 from src.vcd_parser import VCDParser
@@ -138,6 +139,79 @@ def test_implication_inconclusive_at_window_end(tmp_path):
     assert r["inconclusive_count"] == 1
     assert r["holds"] is True  # inconclusive is not a violation
     assert any("inconclusive" in w for w in r["warnings"])
+
+
+def test_exact_response_does_not_accept_an_early_pulse(tmp_path):
+    cycles = [{"req": 1, "ack": 0}, {"req": 0, "ack": 1},
+              {"req": 0, "ack": 0}, {"req": 0, "ack": 0}]
+    args = dict(mode="implication", antecedent=[{"signal":"top.req","op":"eq","value":1}],
+                consequent=[{"signal":"top.ack","op":"eq","value":1}])
+    deadline = _run(tmp_path, cycles, _RA_SIGS, within_cycles=3, **args)
+    exact = _run(tmp_path, cycles, _RA_SIGS, response_min_cycles=3, response_max_cycles=3, **args)
+    assert deadline["holds"] is True
+    assert exact["violation_count"] == 1
+    assert exact["response_min_cycles"] == exact["response_max_cycles"] == 3
+    assert exact["within_cycles"] is None and exact["overlap"] is None
+
+
+def test_selected_attempt_keeps_later_response_edges(tmp_path):
+    cycles = [{"req": 1, "ack": 0}, {"req": 1, "ack": 1}, {"req": 0, "ack": 0}]
+    args = dict(mode="implication", response_min_cycles=1, response_max_cycles=1,
+                antecedent=[{"signal":"top.req","op":"eq","value":1}],
+                consequent=[{"signal":"top.ack","op":"eq","value":1}])
+    selected = _run(tmp_path, cycles, _RA_SIGS, attempt_start_indices=[0], **args)
+    every = _run(tmp_path, cycles, _RA_SIGS, **args)
+    assert selected["holds"] and selected["attempts_evaluated"] == 1
+    assert selected["cycles_evaluated"] == 3
+    assert every["violation_count"] == 1 and every["attempts_evaluated"] == 3
+    assert every["counterexample"]["cycle_index"] == 1
+
+
+def test_before_sampling_excludes_clock_edge_update(tmp_path):
+    wave = _write(tmp_path, """$timescale 1ps $end
+$scope module top $end
+$var wire 1 ! clk $end
+$var wire 1 # ack $end
+$upscope $end
+$enddefinitions $end
+#0
+0!
+0#
+#5
+1!
+1#
+""")
+    args = dict(get_parser=lambda _: VCDParser(wave), wave_path=wave, clock="top.clk",
+                mode="always", predicate=[{"signal":"top.ack","op":"eq","value":0}])
+    before = verify_window(**args, sample_phase="before")
+    after = verify_window(**args)
+    assert before["holds"] and before["sample_offset_ps"] == 0
+    assert not after["holds"] and after["sample_offset_ps"] == 1
+
+
+@pytest.mark.parametrize("extra", [
+    {"response_min_cycles":3},
+    {"response_min_cycles":3,"response_max_cycles":2},
+    {"response_min_cycles":1,"response_max_cycles":2,"within_cycles":2},
+    {"response_min_cycles":1,"response_max_cycles":2,"overlap":True},
+    {"attempt_start_indices":[]}, {"attempt_start_indices":[0,0]},
+    {"attempt_start_indices":[True]}, {"attempt_start_indices":[5]},
+    {"sample_phase":"before","sample_offset_ps":1},
+])
+def test_new_window_controls_reject_ambiguous_inputs(tmp_path, extra):
+    r = _run(tmp_path, [{"req":1,"ack":0}], _RA_SIGS, mode="implication",
+        antecedent=[{"signal":"top.req","op":"eq","value":1}],
+        consequent=[{"signal":"top.ack","op":"eq","value":1}], **extra)
+    assert r["reason"] and not r["holds"]
+
+
+def test_exact_response_outside_window_remains_inconclusive(tmp_path):
+    r = _run(tmp_path, [{"req":1,"ack":0},{"req":0,"ack":1}], _RA_SIGS,
+        mode="implication", response_min_cycles=3, response_max_cycles=3,
+        antecedent=[{"signal":"top.req","op":"eq","value":1}],
+        consequent=[{"signal":"top.ack","op":"eq","value":1}])
+    assert r["violation_count"] == 0 and r["inconclusive_count"] == 1
+    assert r["coverage_status"] == "partial"
 
 
 def test_and_of_two_terms(tmp_path):
