@@ -1580,6 +1580,13 @@ ticks. In particular `empty ##2 empty` is a one-tick match without a required
 Boolean sample; `##0` joined to an empty operand has no match. Frontend legality
 checks still apply to the enclosing property and any empty antecedent.
 
+`throughout` requires a right-hand sequence match; `within` requires both operand
+sequences to match their sampled values as well as satisfying containment. Neither
+operator supplies implication-style vacuity when an operand has no match.
+For goto and nonconsecutive repetition, a finite occurrence count does not bound
+the waiting time between occurrences. A finite run can end with the attempt still
+pending; absence of a match is not automatically a reported assertion failure.
+
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block
 flow are retained. Local sequence input/inout ports copy in at entry; whole-variable

@@ -440,10 +440,13 @@ class Projector:
                     obligation_quantifier='for_every_antecedent_match',
                     consequent_sequence_choices='exists_a_successful_match_for_each_obligation',
                     vacuity='no_antecedent_match_is_vacuous_success',
+                    when_no_antecedent_match='property_succeeds_vacuously; no_consequent_obligation',
                     start_relation='next_tick_after_antecedent_end' if nonoverlap else 'antecedent_end_tick',
                     destination_clock=self.leading_clock(consequent),
                     cross_clock_alignment='nearest_strictly_after' if nonoverlap else 'nearest_at_or_after')
-                out['explanation'] = 'Every antecedent match creates a separate consequent obligation. No match is vacuous success; each consequent may choose a successful sequence alternative.'
+                out['explanation'] = ('Every antecedent match creates a separate consequent obligation. '
+                    'If the antecedent has no match, the implication succeeds vacuously and creates no consequent obligation. '
+                    'Each consequent may choose a successful sequence alternative.')
             elif op in {'And', 'Or', 'Intersect', 'Throughout', 'Within'}:
                 resolved, basis = self.operator_domain(expr, domain)
                 seq = resolved == 'sequence' or op in {'Intersect', 'Throughout', 'Within'}
@@ -474,13 +477,18 @@ class Projector:
                         + ' to match with the SAME start AND end ticks (requires_same_end=true).')
                 elif op == 'Throughout':
                     facts.update(interval=right['id'], requirement='left_true_at_every_tick_of_right_match',
+                                 right_sequence_match='required',
+                                 vacuity='no_implication_style_vacuous_success_from_absent_right_match',
                                  equivalent='left[*0:$] intersect right')
-                    out['explanation'] = 'The left value must hold at every sampling point throughout the right sequence match, including both endpoints.'
+                    out['explanation'] = ('The right sequence must match, and the left value must hold at every sampling point '
+                        'of that match, including both endpoints. An absent right match does not give implication-style vacuous success.')
                 else:
                     facts.update(start_relation='outer.start<=inner.start', end_relation='inner.end<=outer.end',
                                  inner=left['id'], outer=right['id'], result_interval=right['id'],
+                                 match_preconditions='both_inner_and_outer_sequences_must_actually_match_their_sampled_values',
                                  equivalent='(1[*0:$] ##1 inner ##1 1[*0:$]) intersect outer')
-                    out['explanation'] = 'Choose an inner match contained inclusively in an outer match; the resulting interval is the outer interval.'
+                    out['explanation'] = ('Both inner and outer sequences must actually match their sampled values. '
+                        'Choose an inner match contained inclusively in an outer match; the resulting interval is the outer interval.')
             elif op in {'Iff', 'Implies'}:
                 child(expr.left, 'property'); child(expr.right, 'property')
                 facts.update(truth_rule='equivalent_truth' if op == 'Iff' else 'not_left_or_right',
@@ -499,7 +507,8 @@ class Projector:
             if k == 'FirstMatch':
                 facts.update(selection='minimum_end_for_this_attempt_and_operand', ties='retain_all_matching_branches_at_earliest_end',
                              scope='only_the_enclosed_sequence; no_global_earliest_attempt')
-                out['explanation'] = 'Keep the earliest endpoint of this enclosed sequence for this attempt. Preserve all tied matching branches and their local values.'
+                out['explanation'] = ('The enclosed sequence must match before an endpoint can be selected. '
+                    'Keep its earliest endpoint for this attempt. Preserve all tied matching branches and their local values.')
             facts['match_items'] = []
             for item in expr.matchItems:
                 phase = 'reactive_subroutine_call' if kind(item) == 'Call' else 'observed_local_assignment'
@@ -584,6 +593,12 @@ class Projector:
                       'Nonconsecutive':'last_true_occurrence_or_a_later_false_tick_before_next_true'}[mode],
             zero_count=('empty_only' if mode != 'Nonconsecutive' else 'zero_or_more_false_ticks; may_be_empty'))
         out['explanation'] += f' {mode} repetition keeps the symbolic count range and its endpoint rule.'
+        if mode in {'GoTo', 'Nonconsecutive'}:
+            out['facts']['repetition'].update(
+                waiting_bound='unbounded_between_occurrences_even_with_finite_count',
+                finite_window_without_required_occurrences='can_remain_pending; absence_of_match_is_not_automatically_a_failure')
+            out['explanation'] += (' The count bounds occurrences, not elapsed clock ticks. '
+                                   'Waiting for occurrences can remain pending at a finite simulation end.')
 
     def check_local_flow(self, root):
         """Must-defined local values across sequence alternatives, not live signals.

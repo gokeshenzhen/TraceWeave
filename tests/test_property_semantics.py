@@ -108,6 +108,34 @@ def test_interval_containment_and_alignment_are_distinct():
     assert within['result_interval']==within['outer']
 
 
+def test_sequence_matching_requirements_do_not_become_implication_vacuity():
+    implication=complete('a |-> b')
+    throughout=complete('a throughout (b ##2 c)')
+    within=complete('(a ##1 b) within (b ##3 c)')
+    assert node(implication,'OverlappedImplication')['facts']['when_no_antecedent_match']==(
+        'property_succeeds_vacuously; no_consequent_obligation')
+    assert any('If the antecedent has no match, the implication succeeds vacuously' in s
+               for s in implication['summary'])
+    t=node(throughout,'Throughout')['facts']
+    assert t['right_sequence_match']=='required'
+    assert t['vacuity']=='no_implication_style_vacuous_success_from_absent_right_match'
+    assert any('The right sequence must match' in s for s in throughout['summary'])
+    assert node(within,'Within')['facts']['match_preconditions']==(
+        'both_inner_and_outer_sequences_must_actually_match_their_sampled_values')
+    assert any('Both inner and outer sequences must actually match their sampled values' in s
+               for s in within['summary'])
+
+
+@pytest.mark.parametrize('rep',['[->2:4]','[=2:4]'])
+def test_finite_occurrence_count_does_not_promise_a_finite_wait(rep):
+    r=complete('a'+rep)
+    repetition=node(r,'sample')['facts']['repetition']
+    assert repetition['count']==dict(min=2,max=4,unbounded=False)
+    assert repetition['waiting_bound']=='unbounded_between_occurrences_even_with_finite_count'
+    assert repetition['finite_window_without_required_occurrences'].startswith('can_remain_pending;')
+    assert any('count bounds occurrences, not elapsed clock ticks' in s for s in r['summary'])
+
+
 @pytest.mark.parametrize('rep,kind,endpoint',[
     ('[*2:4]','Consecutive','end_of_last_repetition'),
     ('[->2]','GoTo','last_true_occurrence'),
