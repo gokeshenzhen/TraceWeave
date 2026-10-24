@@ -298,10 +298,50 @@ def test_no_completion_is_distinct_from_finite_bad_prefix_and_actual_end():
     assert rule['no_completion_yet']=='pending_if_a_legal_future_match_remains_possible'
     assert rule['requested_window_cutoff']=='cutoff_alone_does_not_establish_completion_or_failure'
     assert rule['unfinished_at_actual_simulation_end'].startswith('missing_completion_alone_is_not_failure')
-    assert any('missing completion ALONE is not failure' in s for s in r['summary'])
+    assert any('THAT still-extendible weak attempt' in s for s in r['summary'])
     neg=complete('assert property(not a[->2]);')
     assert any('Negate' in s for s in neg['summary'])
     assert 'enclosing_operators_still_apply' in node(neg,'sample')['facts']['sequence_property']['scope']
+
+
+@pytest.mark.parametrize('text',['a','$rose(a)','strong(a)','weak(a)'])
+def test_required_single_sample_cannot_be_excused_as_weak_waiting(text):
+    r=complete('assert property('+text+');')
+    rules=[n['facts']['sequence_property'] for n in r['nodes'] if 'sequence_property' in n['facts']]
+    assert len(rules)==1
+    assert rules[0]['match_class']=='required_single_sample'
+    assert rules[0]['decisive_sample']=='true_matches; false_X_Z_boolean_result_is_a_finite_bad_prefix_at_the_required_tick'
+    assert rules[0]['later_values']=='cannot_repair_this_supplied_start'
+    assert any('FALSE immediately, even if WEAK' in s for s in r['summary'])
+    assert not any('THAT still-extendible weak attempt' in s for s in r['summary'])
+
+
+@pytest.mark.parametrize('text',['a[->2]','a[=2]','strong(a[->2])'])
+def test_occurrence_wait_is_not_confused_with_failed_required_single_sample(text):
+    r=complete('assert property('+text+');')
+    rule=next(n['facts']['sequence_property'] for n in r['nodes'] if 'sequence_property' in n['facts'])
+    assert rule['match_class']=='occurrence_wait'
+    assert rule['false_gap']=='may_wait_for_later_occurrences_if_a_legal_continuation_remains'
+    assert 'decisive_sample' not in rule
+    assert not any('FALSE immediately, even if WEAK' in s for s in r['summary'])
+
+
+@pytest.mark.parametrize('text',['a ##1 b','a[*1:2]','a[*0:2] ##1 b','a throughout b[->2]'])
+def test_composed_sequence_bad_prefix_does_not_turn_any_false_sample_into_failure(text):
+    r=complete('assert property('+text+');')
+    rule=next(n['facts']['sequence_property'] for n in r['nodes'] if 'sequence_property' in n['facts'])
+    assert rule['match_class']=='composed_or_repeated_sequence'
+    assert rule['all_candidates_eliminated'].startswith('finite_bad_prefix;')
+    assert 'decisive_sample' not in rule
+
+
+def test_check_failure_mapping_is_whole_property_scoped_after_negation():
+    r=complete('assert property(not a);')
+    mapping=r['directive']['completion_policy']['whole_property_outcomes']
+    assert mapping==dict(true='check_satisfied',false='check_failed',disabled='neither_success_nor_failure',
+        pending='no_completed_result_yet',scope='whole_property_after_enclosing_operators; not_each_operand')
+    assert any('Negate' in s for s in r['summary'])
+    assert any('After applying ALL enclosing operators' in s for s in r['summary'])
 
 
 def test_sequence_cover_and_immediate_assertions_do_not_claim_sequence_property_default_strength():

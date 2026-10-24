@@ -235,7 +235,7 @@ async def test_summary_mode_exposes_completion_policy_without_claiming_a_runtime
     assert item.semantic_status=='complete' and not item.nodes
     assert item.directive['completion_policy']['default_sequence_strength']=='weak'
     assert item.directive['completion_policy']['runtime_outcome']=='not_evaluated'
-    assert any('missing completion ALONE is not failure' in s for s in item.summary)
+    assert any('THAT still-extendible weak attempt' in s for s in item.summary)
 
 
 @pytest.mark.anyio

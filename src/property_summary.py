@@ -78,15 +78,18 @@ def summarize_property(result, max_lines=32):
     completion=result.get('directive',{}).get('completion_policy',{})
     strength=completion.get('default_sequence_strength')
     if strength=='weak':
-        context.append('[completion] This assert/assume uses WEAK for unqualified sequence properties. '
-            'Explicit strong/weak overrides the default. Requested window end and actual simulation end are different; '
-            'the enclosing property operators still apply.')
+        context.append('[completion] Required sequence mismatches still fail under WEAK: eliminate each failed candidate; '
+            'when none can match, that sequence property is false. Only a still-extendible attempt may remain pending. '
+            'Assert/assume defaults to weak for unqualified sequences; explicit strength and enclosing operators still apply.')
     elif strength=='strong':
         context.append('[completion] This calling statement uses STRONG for unqualified sequence properties; '
                        'explicit strength overrides the default. Rules below describe source semantics, not observed callbacks.')
     elif strength=='caller_dependent':
         context.append('[completion] Unqualified sequence strength needs the calling statement: '
             'assert/assume property defaults to weak, other property statements to strong. Explicit strength is retained below.')
+    if completion.get('whole_property_outcomes'):
+        context.append('[check] After applying ALL enclosing operators, whole-property false means check failure; '
+            'whole-property true means satisfied. A disabled attempt has neither result; pending is not a completed result.')
     clocks = result.get('clocks', [])
     for clock in clocks[:4]:
         context.append(f"[clock {clock['id']}] {_label(clock['event'])}; inherited delays use this clock's sampling ticks. "
@@ -123,10 +126,13 @@ def summarize_property(result, max_lines=32):
             explanation = ' '.join(([explanation] if important and node['op'] != 'sample' else []) + rules)
         sequence=facts.get('sequence_property',{})
         strength=sequence.get('effective_strength')
-        if strength=='weak':
-            explanation += (' This sequence is WEAK: failure needs a finite bad prefix making every legal future match '
-                'for this start impossible. If a future match remains possible, missing completion means pending; '
-                'even at actual simulation end, missing completion ALONE is not failure of this weak sequence property.')
+        if sequence.get('match_class')=='required_single_sample':
+            explanation += (' At its required sampling tick, a true Boolean result matches; a false/X/Z Boolean result makes this sequence property FALSE '
+                'immediately, even if WEAK. A later true value cannot repair this start. Enclosing property operators still apply.')
+        elif strength=='weak':
+            explanation += (' WEAK still becomes FALSE when every legal matching candidate is eliminated by required mismatches. '
+                'Only if a legal continuation remains can this attempt stay pending; missing completion alone at actual '
+                'simulation end does not fail THAT still-extendible weak attempt. A requested window cutoff is not actual simulation end.')
         elif strength=='strong':
             explanation += (' This sequence is STRONG: a nonempty completing match is required. '
                 'An unfinished sequence is not satisfied at actual simulation end; a requested window cutoff alone is not that event.')

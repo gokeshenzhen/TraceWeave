@@ -551,7 +551,7 @@ class Projector:
             out['op'] = expr.strength.name.lower()
             child(expr.expr, 'sequence')
             facts.update(completion='nonempty_match_required' if out['op']=='strong' else 'no_finite_bad_prefix',
-                unfinished='strong_sequence_not_satisfied_without_completion' if out['op']=='strong' else 'finite_end_without_match_is_not_a_counterexample',
+                unfinished='strong_sequence_not_satisfied_without_completion' if out['op']=='strong' else 'finite_end_without_match_is_not_a_counterexample_only_if_no_finite_bad_prefix',
                 observation='tool_does_not_determine_runtime_pending_or_finish_callbacks')
             out['explanation'] = 'Strong requires a nonempty completing sequence match.' if out['op']=='strong' else 'Weak requires absence of a finite prefix that makes matching impossible; finite truncation is not a completed match.'
         elif k == 'Conditional':
@@ -594,8 +594,9 @@ class Projector:
         # sequence component or to an implication antecedent.
         if k=='StrongWeak' or (domain=='property' and (out['domain']=='sequence' or out['op']=='sample')):
             from .property_completion import sequence_property_rules
+            match_node=(self.result['nodes'][int(out['children'][0][1:])] if k=='StrongWeak' else out)
             facts['sequence_property']=sequence_property_rules(self.result.get('directive',{}),
-                explicit=out['op'] if k=='StrongWeak' else None)
+                explicit=out['op'] if k=='StrongWeak' else None,match_node=match_node)
         if (facts.get('repetition', {}).get('empty_match_allowed') or
                 any(c in self.empty_repetition_subtrees for c in out['children'])):
             self.empty_repetition_subtrees.add(out['id'])

@@ -1620,6 +1620,13 @@ because simulation ends. A requested waveform cutoff does not prove the actual
 simulation end, and enclosing negation/abort/composition can change the whole
 property result. No per-run pending/pass/failure state or simulator reporting is
 inferred by this static service.
+Required sample mismatches eliminate candidates even under weak strength; once
+all candidates are eliminated there is a finite bad prefix. A false/X/Z Boolean
+result at a single required sample fails at its tick and cannot be repaired by later
+values. Occurrence repetitions retain their distinct ability to wait through
+false gaps. Summaries put these failure conditions before unfinished-at-end
+rules. Whole-property truth maps to check satisfaction/failure only after all
+enclosing operators, separately from disabled and pending attempts.
 
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block
