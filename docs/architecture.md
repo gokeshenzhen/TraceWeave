@@ -1803,6 +1803,29 @@ Client integration is required to assemble final facts without model rewriting;
 ordinary MCP clients continue to receive additive IDs alongside the existing
 values. A resolved fact remains evidence from that query, not a new observation
 of a potentially changed waveform file.
+`failure_event.start_time_ps` retains the normalized logged start when supplied.
+Clients can call `src.property_verdict.resolve_property_verdict` with their original
+response and expected `wave_path`, `failure_event`, optional `plan_fingerprint` and
+`check_id`. It checks exact wave, directive instance, report/start and requested
+identities before mapping a known tool status to a local verdict. Legacy receipts
+can recover a logged start only from their single logged-start attempt, never an
+arbitrary read-window boundary. A witnessed positive may remain authoritative with
+partial candidate coverage. Non-reproduction requires complete execution, coverage
+and candidate checks; pending/unknown results (including unresolved history),
+unsupported and failed execution remain unresolved. A complete disabled or vacuous
+attempt is only evidence about the supplied failure event, never a whole-run pass
+or root cause.
+
+`assemble_property_answer` in the same module uses this decision for final verdict
+and canonical anchors, optionally resolving evidence references as well. It retains
+the original `model_proposal`, records changed fields in `proposal_conflicts`, and
+separates the unverified `model_interpretation` from a program-generated decision
+description. If the tool is unresolved, a retained proposal is explicitly labelled
+`verdict_source="model_fallback"`; it is not promoted to a tool conclusion. Callers
+must retain and supply original trusted tool receipts, check conflicting receipts
+before selecting one, and integrate this pure helper in their client. The helper
+performs no I/O or new simulation and does not classify free-form prose or certify
+the explanation merely because a verdict and physical facts are correct.
 Semantic failure and simulator reporting time are retained separately. Complete
 disjoint endpoint inventories can establish an impossible intersection at its
 start. If a log identifies the same attempt, a false prefix at or before its

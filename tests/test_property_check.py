@@ -63,6 +63,7 @@ async def test_log_selects_first_failure_of_exact_source_instance(tmp_path):
     assert result.failure_event['time_ps']==35
     assert result.failure_event['selection_basis']=='first_target_failure_from_log'
     assert result.attempt_selection['basis']=='logged_attempt_start'
+    assert result.failure_event['start_time_ps']==5
 
 
 @pytest.mark.anyio
@@ -172,6 +173,23 @@ async def test_constant_property_exposes_an_actual_clock_sample_for_reference_as
     assert assembled['signal_facts'][0]['sample_phase']=='before'
     assert assembled['expression_facts'][0]['value']['bin']=='0'
     assert 'signal' not in assembled['expression_facts'][0]
+
+
+@pytest.mark.anyio
+async def test_answer_assembly_preserves_tool_verdict_against_reversed_model_json(tmp_path):
+    from src.property_verdict import assemble_property_answer
+    handle=await plan();path=wave(tmp_path)
+    event=dict(time_ps=35,instance_path='top.ap',structured_fields={'start_time_ps':5})
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=path,
+        property_plan=handle,failure_event=event))
+    sample=result.attempts[0]['sampled_values'][0]
+    references=dict(check_id=result.evidence_context['check_id'],
+                    signal_evidence_ids=[sample['evidence_id']],expression_evidence_ids=[])
+    answer=assemble_property_answer(result,dict(verdict='not_reproduced',attempt_start_ps=5,
+        report_time_ps=35,reason='model says not reproduced'),wave_path=path,
+        failure_event=event,plan_fingerprint=result.plan['fingerprint'],references=references)
+    assert answer['verdict']=='reproduced' and answer['proposal_conflicts']==['verdict']
+    assert answer['resolved_evidence']['signal_facts'][0]['value']==sample['value']
 
 
 @pytest.mark.anyio

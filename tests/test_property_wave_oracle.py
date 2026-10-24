@@ -74,6 +74,11 @@ def test_vcs_native_outcomes_replay_over_waveform(format):
             assert plan and plan['status']=='prepared',(name,explained)
             result=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],
                 wave_path=str(waveform),failure_event=event))
+            from src.property_verdict import resolve_property_verdict
+            decision=resolve_property_verdict(result,wave_path=str(waveform),failure_event=event,
+                plan_fingerprint=plan['fingerprint'])
+            assert decision['authoritative']
+            assert decision['verdict']==('reproduced' if name in first else 'not_reproduced')
             if format!='vcd':
                 reference=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],
                     wave_path=str(path/'oracle.vcd'),failure_event=event))
@@ -125,6 +130,12 @@ def test_native_first_sample_partial_values_do_not_certify_missing_history(forma
                 wave_path=str(waveform),failure_event=event))
             assert result.status==('failure_reproduced' if name in decisive else
                 'insufficient_evidence' if name in ambiguous else 'not_reproduced'),(name,result)
+            from src.property_verdict import resolve_property_verdict
+            decision=resolve_property_verdict(result,wave_path=str(waveform),failure_event=event,
+                plan_fingerprint=plan['fingerprint'])
+            assert decision['authoritative']==(name not in ambiguous)
+            assert decision['verdict']==('reproduced' if name in decisive else
+                None if name in ambiguous else 'not_reproduced')
             assert 'history_before_capture_unavailable' in result.gap_codes
             if format!='vcd':
                 reference=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],

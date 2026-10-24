@@ -428,6 +428,7 @@ def check_property(parser,plan,options,event,*,deadline):
         bindings=bindings,bindings_truncated=False,attempts=attempts,attempts_truncated=False,
         reproduced_count=reproduced,gap_codes=sorted(engine.gaps),
         work_steps=engine.work,match_count=engine.match_count,output_truncated=False)
+    if started is not None:result['failure_event']['start_time_ps']=started
     if not complete:result['gap_codes'].append('property_candidate_history_incomplete')
     if any(a['status']=='pending' for a in attempts):
         result['gap_codes'].append('property_pending_at_report_cutoff')
