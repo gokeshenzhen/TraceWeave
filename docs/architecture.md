@@ -1574,6 +1574,12 @@ Default disables retain asynchronous evaluation separately from sampled function
 inside their conditions. Physical waveform pre-edge values are not automatically
 assertion scheduling-region samples.
 
+Same-clock concatenation retains explicit empty-operand endpoint rules. An empty
+match ends at `start-1`: for positive delay `N`, `empty ##N empty` spans `N-1`
+ticks. In particular `empty ##2 empty` is a one-tick match without a required
+Boolean sample; `##0` joined to an empty operand has no match. Frontend legality
+checks still apply to the enclosing property and any empty antecedent.
+
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block
 flow are retained. Local sequence input/inout ports copy in at entry; whole-variable

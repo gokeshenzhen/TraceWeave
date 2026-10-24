@@ -127,6 +127,34 @@ def test_empty_match_and_unbounded_count_are_not_flattened():
     assert 'N-1' in node(r,'concat')['facts']['joins'][0]['empty']
 
 
+@pytest.mark.parametrize('text,delay',[
+    ('(a[*0] ##2 a[*0])[*1]',2),
+    ('a[*0] ##3 a[*0]',3),
+    ('a[*0] ##4 a[*0]',4),
+    ('a[*0] ##2 b',2),
+    ('a ##2 b[*0]',2)])
+def test_positive_empty_joins_account_for_both_endpoints(text,delay):
+    # Independent endpoint oracle: an empty match has end=start-1. Applying
+    # that on both sides gives durations 1,2,3 for delays 2,3,4 respectively;
+    # it does not make every empty/empty concatenation unsatisfiable.
+    r=complete(text)
+    concat=node(r,'concat')
+    rules=concat['facts']['empty_join_rules']
+    assert concat['facts']['joins'][0]['delay']['min']==delay
+    assert rules['empty_endpoint']=='end=start-1'
+    assert rules['left_empty_positive_delay']=='right.start=attempt.start+N-1'
+    assert rules['right_empty_positive_delay']=='result.end=left.end+N-1'
+    assert rules['both_empty_positive_delay'].startswith('duration_ticks=N-1;')
+    assert any('empty ##2 empty is a one-tick match' in s for s in r['summary'])
+
+
+def test_empty_join_summary_follows_a_named_sequence_without_treating_all_sequences_as_empty():
+    r=complete('empty_s ##2 empty_s',declarations='sequence empty_s; a[*0]; endsequence')
+    assert any('empty ##2 empty is a one-tick match' in s for s in r['summary'])
+    ordinary=complete('a ##2 b')
+    assert not any('empty ##2 empty is a one-tick match' in s for s in ordinary['summary'])
+
+
 def test_named_parameter_binding_and_width_survive_local_capture():
     r=complete('property p(x); logic [3:0] v; (a,v=x) |=> v==data; endproperty',arguments=['data'])
     assert r['directive']['kind']=='definition'

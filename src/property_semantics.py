@@ -41,6 +41,7 @@ class Projector:
         self.variables = {}
         self.clock_ids = {}
         self.native_clocks = {}
+        self.empty_repetition_subtrees = set()
 
     def charge(self, depth=0):
         self.visits += 1
@@ -411,11 +412,21 @@ class Projector:
                     facts['joins'].append(dict(left=prior, right=part['id'], delay=delay,
                         same_clock='start(right)=end(left)+delay ticks; initial delay is relative to attempt start',
                         cross_clock='##0: nearest destination event at_or_after left end; ##1: nearest strictly_after; other delays across clocks are illegal',
-                        empty='empty ##0 sequence and sequence ##0 empty have no match; empty ##N sequence uses N-1 for N>0',
+                        empty='empty ##0 sequence and sequence ##0 empty have no match; for N>0 an empty operand ends at start-1, so either side shifts by N-1',
                         right_clock=self.leading_clock(part)))
                 prior = part['id']
             facts['match_quantifier'] = 'all_legal_combinations_of_component_matches_and_delay_choices'
+            facts['empty_join_rules'] = dict(
+                scope='same_clock; N_is_the_selected_delay',
+                empty_endpoint='end=start-1',
+                left_empty_positive_delay='right.start=attempt.start+N-1',
+                right_empty_positive_delay='result.end=left.end+N-1',
+                both_empty_positive_delay='duration_ticks=N-1; N=1_is_empty; N>=2_spans_ticks_without_a_boolean_sample',
+                zero_delay_with_empty='no_match')
             out['explanation'] = 'Concatenation relates each next start to the preceding match end. Ranges preserve alternatives instead of selecting one delay.'
+            if any(c in self.empty_repetition_subtrees for c in out['children']):
+                out['explanation'] += (' An empty operand ends at start-1. For N>0, empty ##N empty spans N-1 ticks; '
+                                       'empty ##2 empty is a one-tick match without requiring a true value. An empty operand joined by ##0 has no match.')
         elif k == 'Binary':
             op = expr.op.name
             out['op'] = op
@@ -541,6 +552,9 @@ class Projector:
             out['domain'] = 'unresolved'
             self.missing('invalid_assertion' if k=='Invalid' else 'assertion_projection_unsupported',
                          'context' if k=='Invalid' else 'unsupported', f'Cannot project assertion node {k}.', expr)
+        if (facts.get('repetition', {}).get('empty_match_allowed') or
+                any(c in self.empty_repetition_subtrees for c in out['children'])):
+            self.empty_repetition_subtrees.add(out['id'])
         return out
 
     def leading_clock(self, node):
