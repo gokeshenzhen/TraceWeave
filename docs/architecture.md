@@ -1677,7 +1677,11 @@ A byte-limited response also retains `gap_codes` and marks `gaps_truncated` when
 detailed diagnostics are shortened. Request an explicit item again for more detail;
 there is no implicit current property. AI interpretation of remaining source gaps
 must stay labelled as inference.
-`diagnostics_truncated` marks the frontend diagnostic display cap; errors precede
+Summary display keeps all retained frontend errors and at most eight warning
+details, preferring the selected target's source location. Full display retains
+the frontend's original diagnostic allowance. This display reduction does not
+change semantic completeness, preparation gaps or executable plans.
+`diagnostics_truncated` marks the frontend or summary diagnostic display cap; errors precede
 warnings, and warning-only truncation does not make complete semantic analysis partial.
 
 `include_check_plan=true` optionally lowers bound integral values through the shared

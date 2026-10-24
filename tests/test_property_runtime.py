@@ -16,6 +16,26 @@ import src.property_runtime as runtime
 UNIT={'id':'u','declarations':'bit clk,a,b;','default_clock':'posedge clk'}
 
 
+def test_summary_limits_warning_details_without_hiding_errors_or_status():
+    from copy import deepcopy
+    from src.property_records import explanation_record
+    row=explanation_record('warnings')
+    row.update(semantic_status='partial',target=dict(source=dict(file='target.sv',line=100)))
+    errors=[dict(severity='error',message='binding error',file='other.sv',line=1)]
+    warnings=[dict(severity='warning',message=f'unrelated {i}',file='other.sv',line=i) for i in range(20)]
+    warnings.append(dict(severity='warning',message='selected expression warning',file='target.sv',line=99))
+    row['diagnostics']=[*errors,*warnings]
+    result=dict(results=[deepcopy(row)],output_truncated=False)
+    summary=runtime._trim(result,ExplainPropertyOptions(text='1',detail='summary'))['results'][0]
+    assert summary['semantic_status']=='partial'
+    assert summary['diagnostics'][0]==errors[0]
+    assert len(summary['diagnostics'])==9
+    assert summary['diagnostics'][1]['message']=='selected expression warning'
+    assert summary['diagnostics_truncated'] and summary['output_truncated']
+    full=runtime._trim(dict(results=[deepcopy(row)],output_truncated=False),ExplainPropertyOptions(text='1'))['results'][0]
+    assert full['diagnostics']==row['diagnostics']
+
+
 async def run(args, **kwargs):
     return await explain_properties(args,registry=kwargs.pop('registry',PropertyRunRegistry()),
         config=kwargs.pop('config',get_source_graph_execution_config()),run_thread=asyncio.to_thread,**kwargs)

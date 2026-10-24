@@ -201,6 +201,15 @@ def _trim(result, options):
         for row in result['results']:
             row['output_truncated']|=bool(row['nodes'] or row['effects'])
             row['nodes']=[]; row['effects']=[]
+            errors=[d for d in row['diagnostics'] if d.get('severity')=='error']
+            warnings=[d for d in row['diagnostics'] if d.get('severity')!='error']
+            if len(warnings)>8:
+                target=row.get('target',{}).get('source',{})
+                warnings.sort(key=lambda d:(d.get('file')!=target.get('file'),
+                    abs(d.get('line',0)-target.get('line',0))))
+                row['diagnostics']=[*errors,*warnings[:8]]
+                row['diagnostics_truncated']=True
+                row['output_truncated']=True
     def size(): return len(json.dumps(result,separators=(',',':'),ensure_ascii=True).encode())
     # Retain status and gaps for EVERY item. Never pretend trimmed analysis is incomplete.
     for row in sorted(result['results'],key=lambda r:len(json.dumps(r)),reverse=True):
