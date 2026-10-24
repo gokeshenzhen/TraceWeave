@@ -224,5 +224,3 @@ def test_actual_end_is_distinct_from_a_prefix_probe_or_wave_cutoff():
     weak=make('weak(a[->2])',rows,actual_end=True).attempt(0)
     assert strong['status']=='false' and strong['end_index']==1
     assert weak['status']=='true' and weak['end_index']==1
-
-
