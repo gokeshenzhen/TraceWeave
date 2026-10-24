@@ -229,7 +229,7 @@ the optional frontend requirement and limits.
 
 For a logged assertion, request `include_check_plan=true` and pass its
 `results[].check_plan.handle` to `verify_window` with `mode="property"`, the
-`wave_path`, and a normalized `failure_event` or `log_path`. With a log, the tool
+VCD/FSDB/FST `wave_path`, and a normalized `failure_event` or `log_path`. With a log, the tool
 selects the first failure of the exact directive instance. It derives the clock,
 attempts and history window, reads pre-edge values, and returns source-linked
 evidence. Check `status`, coverage and gaps; `not_reproduced` applies only to that

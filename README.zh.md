@@ -221,7 +221,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 复核日志中的断言失败时，先请求 `explain_property(include_check_plan=true)`，
 将 `results[].check_plan.handle` 传给 `verify_window` 的 `property_plan`，并指定
-`mode="property"`、`wave_path` 以及 `log_path` 或规范化的 `failure_event`。
+`mode="property"`、VCD/FSDB/FST 的 `wave_path` 以及 `log_path` 或规范化的 `failure_event`。
 提供日志时，工具选择目标断言实例的首次失败，自动推导时钟、尝试起点与历史窗口，
 读取沿前值并返回关联源码节点的数值与端点证据。结合 `status`、覆盖范围和缺口解释结果；
 `not_reproduced` 只针对本次失败复核，不代表全局通过。文本计划可通过 `property_scope`

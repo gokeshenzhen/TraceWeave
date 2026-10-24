@@ -547,7 +547,7 @@ Most of these are not part of the default flow above; reach for them when the sy
 
 For a failed concurrent assertion, use `explain_property(include_check_plan=true)`
 on the exact directive instance, then call `verify_window(mode="property",
-property_plan=<handle>, wave_path=..., log_path=...)`. Log selection uses the first
+property_plan=<handle>, wave_path=..., log_path=...)` with VCD, FSDB or FST. Log selection uses the first
 failure of that instance, independently of other assertion failures. Alternatively
 pass the normalized `failure_event` returned by log parsing, or an explicit
 `failure_time_ps` TimeSpec. The tool derives the relevant attempts and history;

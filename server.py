@@ -9116,8 +9116,6 @@ async def _handle_property_check(args):
     try:
         if isinstance(raw.get('failure_time_ps'),str):raw['failure_time_ps']=_resolve_time(raw['failure_time_ps'])
         options=PropertyCheckOptions.model_validate(raw)
-        if options.wave_path.lower().endswith('.fst'):
-            return blocked('property_fst_not_validated','unsupported')
         deadline=time.monotonic()+options.timeout_sec
         async with asyncio.timeout(options.timeout_sec):
             entry=_property_plans.resolve(options.property_plan)
@@ -9158,6 +9156,8 @@ async def _handle_property_check(args):
         return blocked('property_check_arguments_invalid')
     except KeyError:
         return blocked('property_signal_unavailable')
+    except FstError:
+        raise
     except (OSError,ValueError,RuntimeError) as exc:
         code=str(exc)
         if len(code)>100 or not code or any(not(c.islower() or c.isdigit() or c=='_') for c in code):

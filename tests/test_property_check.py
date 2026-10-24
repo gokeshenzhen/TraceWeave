@@ -250,13 +250,10 @@ async def test_sampled_value_in_consequent_uses_assertion_clock(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_property_only_controls_and_unvalidated_format_are_explicit(tmp_path):
+async def test_property_only_controls_require_property_mode(tmp_path):
     result=await server._dispatch('verify_window',dict(mode='always',wave_path=wave(tmp_path),
         clock='top.clk',property_plan='unused',predicate=[dict(signal='top.req',op='eq',value=1)]))
     assert result.error_code=='property_options_require_property_mode'
-    result=await server._dispatch('verify_window',dict(mode='property',wave_path='unused.fst',
-        property_plan='unused',failure_time_ps=35))
-    assert result.status=='unsupported' and result.error_code=='property_fst_not_validated'
 
 
 @pytest.mark.anyio

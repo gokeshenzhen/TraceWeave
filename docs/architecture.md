@@ -1709,7 +1709,7 @@ Display trimming does not stop analysis. Default bounds are 200,000 work steps,
 remain separate. This layer performs no waveform I/O or source parsing.
 
 `verify_window(mode="property")` executes a registered `property_plan` handle
-against VCD/FSDB. Supply `log_path` to select the first failure of the exact source
+against VCD/FSDB/FST. Supply `log_path` to select the first failure of the exact source
 directive instance, a normalized `failure_event`, or a `failure_time_ps` TimeSpec.
 No clock or window arithmetic is required from the caller. The tool uses logged
 attempt start times when available, otherwise derives candidate starts from the
@@ -1730,9 +1730,16 @@ state before the current physical timestamp group; in a sequence or consequent i
 uses the assertion clock sample. Control timestamps are witnessed dump events,
 not a reconstruction of simulator delta-region callbacks.
 Unresolved same-time control ordering stays unknown. First-clock defaults require
-history-origin evidence, never a new arbitrary window boundary. FST property
-execution, multiple clocks, recursive definitions and unmodeled effects remain
+history-origin evidence, never a new arbitrary window boundary. Multiple clocks,
+recursive definitions and unmodeled effects remain
 explicit gaps. Source identity does not certify the bytes used by an earlier run.
+
+FST property reads share the existing isolated reader, per-path lock, request
+ownership and cumulative 30-second FST deadline (in addition to the property
+deadline). Initial observations strictly before a window can seed asynchronous
+controls without becoming fabricated predecessor transitions. Recording gaps and
+incomplete reads prevent a complete check. Native FST failures retain the common
+`fst_*` error codes, and request exit reaps workers and private event spools.
 
 Property mode returns its own result contract: `failure_reproduced`,
 `not_reproduced`, `insufficient_evidence` or `unsupported`, with execution/coverage,

@@ -12,6 +12,7 @@ from .cycle_query import sample_signals_on_edges, _read_sweep_transition_result
 from .dynamic_binding import signal_expression
 from .dynamic_evidence import Expr, evaluate
 from .expression_values import Value
+from .event_pages import sampling_anchor
 from .property_engine import PropertyEngine, UnsupportedPlan
 from .scope_metadata import file_identity
 from .waveform_selection import SelectionParser
@@ -222,7 +223,7 @@ def _async_controls(parser,plan,keys,engine,start,end,deadline):
             result=_read_sweep_transition_result(parser,keys[source],start,end,kind='signal',sample_phase='before')
             if result.get('truncated') or result.get('sampling_gaps'):
                 raise ValueError('property_abort_transitions_incomplete')
-            anchor=result.get('predecessor')
+            anchor=sampling_anchor(result)
             states[source]=(anchor.get('value') or {}).get('bin') if anchor else None
             for row in result.get('transitions',[]):
                 engine.charge();records+=1
