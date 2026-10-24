@@ -1725,7 +1725,10 @@ identities are rechecked before publication. Clock-window discovery is bounded,
 adaptive and uses raw-fs events rather than a guessed period. Public-ps collisions
 at the failure/start anchor are rejected as ambiguous. Data sampling is strictly
 before the physical edge. Asynchronous controls read separate transition timelines,
-including between-edge pulses; sampled functions inside them retain clock sampling.
+including between-edge pulses. `$sampled` in an asynchronous condition uses the
+state before the current physical timestamp group; in a sequence or consequent it
+uses the assertion clock sample. Control timestamps are witnessed dump events,
+not a reconstruction of simulator delta-region callbacks.
 Unresolved same-time control ordering stays unknown. First-clock defaults require
 history-origin evidence, never a new arbitrary window boundary. FST property
 execution, multiple clocks, recursive definitions and unmodeled effects remain

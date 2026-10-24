@@ -218,11 +218,32 @@ async def test_gated_history_is_read_before_the_attempt_window(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_sampled_disable_does_not_use_between_edge_raw_reset(tmp_path):
+@pytest.mark.parametrize('condition,disabled_at',[
+    ('rst',7),('$sampled(rst)',8),('$sampled(rst) && !rst',8),('captured',None),
+])
+async def test_async_sampled_control_observes_time_slot_prestate(tmp_path,condition,disabled_at):
+    # Native VCS: raw reset disables at its rise; $sampled(reset) sees the
+    # previous value at its fall. A clocked register remains zero throughout.
+    signals=_RA_SIGS+[('&','rst',1),('*','captured',1)]
+    vcd=_build_vcd([dict(req=1,ack=0,rst=0,captured=0),dict(req=0,ack=0,rst=0,captured=0)],signals)
+    path=tmp_path/'sampled-reset.vcd';path.write_text(vcd.replace('#10\n','#7\n1&\n#8\n0&\n#10\n'))
+    handle=await plan(f'disable iff({condition}) (req |=> ack)',declarations='logic clk,req,ack,rst,captured;')
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=str(path),property_plan=handle,
+        failure_event=dict(time_ps=15,instance_path='top.ap',structured_fields={'start_time_ps':5})))
+    if disabled_at is None:
+        assert result.status=='failure_reproduced',result
+    else:
+        assert result.status=='not_reproduced',result
+        assert result.attempts[0]['status']=='disabled'
+        assert result.attempts[0]['end_time_ps']==disabled_at
+
+
+@pytest.mark.anyio
+async def test_sampled_value_in_consequent_uses_assertion_clock(tmp_path):
     signals=_RA_SIGS+[('&','rst',1)]
     vcd=_build_vcd([dict(req=1,ack=0,rst=0),dict(req=0,ack=0,rst=0)],signals)
-    path=tmp_path/'sampled-reset.vcd';path.write_text(vcd.replace('#10\n','#7\n1&\n#8\n0&\n#10\n'))
-    handle=await plan('disable iff($sampled(rst)) (req |=> ack)',declarations='logic clk,req,ack,rst;')
+    path=tmp_path/'sampled-value.vcd';path.write_text(vcd.replace('#10\n','#7\n1&\n#8\n0&\n#10\n'))
+    handle=await plan('req |=> $sampled(rst)',declarations='logic clk,req,ack,rst;')
     result=await server._dispatch('verify_window',dict(mode='property',wave_path=str(path),property_plan=handle,
         failure_event=dict(time_ps=15,instance_path='top.ap',structured_fields={'start_time_ps':5})))
     assert result.status=='failure_reproduced',result

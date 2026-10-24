@@ -202,10 +202,16 @@ def _async_controls(parser,plan,keys,engine,start,end,deadline):
         raw=node['facts']['condition'].get('execution',{}).get('expression')
         if raw is None:raise UnsupportedPlan('abort_expression_unavailable')
         expression=Expr.from_dict(raw);dependencies=set();stack=[expression];sampled_functions=False
+        visited_history=set()
         while stack:
             part=stack.pop()
-            sampled_functions|=part.op=='signal' and part.signal.startswith('@history:')
-            if part.op=='signal' and not part.signal.startswith('@history:'):
+            if part.op=='signal' and part.signal.startswith('@history:'):
+                sampled_functions=True
+                if part.signal not in visited_history:
+                    visited_history.add(part.signal)
+                    history=plan['histories'][part.signal]
+                    if history['function']=='$sampled':stack.append(engine._expr(history['expression']))
+            elif part.op=='signal':
                 if part.signal in engine.locals:raise UnsupportedPlan('local_abort_condition_unsupported')
                 dependencies.add(part.signal)
             stack.extend(part.args)
@@ -227,26 +233,35 @@ def _async_controls(parser,plan,keys,engine,start,end,deadline):
         edges=[s['time_fs'] for s in engine.samples]
         if sampled_functions:
             for at in edges:events.setdefault(at,[])
-        def condition(at):
+        def condition(at,pre_states):
             tick=bisect_right(edges,at)-1
-            def sample(part):
+            def sample(part,values=states):
+                engine.charge()
                 if part.signal.startswith('@history:'):
+                    history=plan['histories'][part.signal]
+                    if history['function']=='$sampled':
+                        # Async conditions are unsampled expressions. $sampled
+                        # observes the preponed state of this physical time slot,
+                        # rather than retaining the last assertion clock sample.
+                        observed=evaluate(engine._expr(history['expression']),lambda p:sample(p,pre_states))
+                        return dict(value=observed.value)
                     value=engine.history(part.signal,tick,{}) if tick>=0 else None
                     return dict(value=None if value is None else value.bits)
-                bits=states.get(part.signal);shape=plan['signals'][part.signal]
+                bits=values.get(part.signal);shape=plan['signals'][part.signal]
                 if bits is None:return dict(value=None)
                 positions={bit:i for i,bit in enumerate(shape['bits'])}
                 return dict(value=''.join(bits[positions[b]] for b in part.bits))
             observed=evaluate(expression,sample)
             return None if observed.value is None else Value(observed.value,expression.signed)
-        timeline=[(start*1000-1,condition(start*1000-1))]
+        timeline=[(start*1000-1,condition(start*1000-1,states))]
         for at,changes in sorted(events.items()):
             check_cancelled()
+            pre_states=states.copy()
             seen={};ambiguous=False
             for source,bits in changes:
                 ambiguous|=source in seen and seen[source]!=bits
                 seen[source]=bits;states[source]=bits
-            timeline.append((at,None if ambiguous else condition(at)))
+            timeline.append((at,None if ambiguous else condition(at,pre_states)))
         controls[node['id']]=timeline
     return controls
 
@@ -351,6 +366,7 @@ def check_property(parser,plan,options,event,*,deadline):
         attempt_selection=dict(basis=basis,candidate_count=len(candidates),checked_count=len(attempts),complete=complete),
         sampling=dict(phase='before',offset_ps=0,time_domain='raw_fs',
             equivalence='physical_pre_edge; simulator_delta_regions_not_recorded',
+            async_sampled='pre_timestamp_group_witnesses',
             history_start_ps=start,read_end_ps=fail,actual_simulation_end='not_assumed'),
         bindings=bindings,bindings_truncated=False,attempts=attempts,attempts_truncated=False,
         reproduced_count=reproduced,gap_codes=sorted(engine.gaps),
