@@ -2717,6 +2717,7 @@ class PropertyCheckResult(SchemaModel):
     failure_event: dict[str,Any] = Field(default_factory=dict)
     attempt_selection: dict[str,Any] = Field(default_factory=dict)
     sampling: dict[str,Any] = Field(default_factory=dict)
+    evidence_context: dict[str,Any] = Field(default_factory=dict)
     bindings: list[dict[str,Any]] = Field(default_factory=list)
     bindings_truncated: bool = False
     attempts: list[dict[str,Any]] = Field(default_factory=list)

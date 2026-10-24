@@ -14,6 +14,7 @@ from .dynamic_evidence import Expr, evaluate
 from .expression_values import Value
 from .event_pages import sampling_anchor
 from .property_engine import PropertyEngine, UnsupportedPlan
+from .property_evidence import attach_evidence_references
 from .scope_metadata import file_identity
 from .waveform_selection import SelectionParser
 
@@ -310,6 +311,9 @@ def _trim(result,max_bytes):
                     else:hi=mid-1
                 attempt['sampled_values']=observed[:lo]
                 return result
+        if attempt.get('clock_sample') is not None:
+            attempt['clock_sample']=None;attempt['clock_sample_truncated']=True
+            if size()<=max_bytes:return result
     result['bindings']=[];result['bindings_truncated']=True
     result['suggested_next_action']=None
     while result['attempts'] and size()>max_bytes:
@@ -375,7 +379,14 @@ def check_property(parser,plan,options,event,*,deadline):
     for i in candidates:
         check_cancelled()
         attempt=engine.attempt(i)
-        for observed in attempt['sampled_values']:
+        # This is the actual pre-edge column value, not the posedge witness 1.
+        clock_value=samples[i]['signals'][source]
+        clock_bits=clock_value.get('bin') if isinstance(clock_value,dict) else clock_value
+        attempt['clock_sample']=(dict(source=source,tick=i,time_ps=times[i],time_fs=raw_times[i],
+            value={'bin':clock_bits}) if clock_bits is not None else None)
+        attempt['clock_sample_truncated']=False
+        observations=attempt['sampled_values']+([attempt['clock_sample']] if attempt['clock_sample'] else [])
+        for observed in observations:
             projection=adapter.projections[keys[observed['source']]]
             observed['signal']=projection.path
             if projection.selection.bits!=projection.declared.indices:
@@ -431,6 +442,7 @@ def check_property(parser,plan,options,event,*,deadline):
                 start_time_ps=max(0,min(a['start_time_ps'] for a in attempts)-1),
                 cycle_index_origin='window',num_cycles=min(256,options.max_edges,max(16,(maximum or 0)+(history or 0)+1)),
                 sample_phase='before',sample_offset_ps=0))
+    attach_evidence_references(result,deadline=deadline)
     if before!=file_identity(options.wave_path):raise ValueError('property_wave_identity_changed')
     for source,key in keys.items():
         adapter._validate(adapter.projections[key])

@@ -1782,6 +1782,27 @@ display caps do not alter matching or coverage. Pending attempts at the report
 cutoff retain `insufficient_evidence` and can suggest a bounded
 `get_signals_by_cycle` query for the same attempt beyond that cutoff. The suggestion
 does not run automatically or certify a later failure at the supplied report time.
+Property mode also returns `evidence_context` (version 1, a unique `check_id`).
+Retained `sampled_values` and each attempt's actual pre-edge `clock_sample` have
+typed `s_*` evidence IDs; expression results have `x_*` IDs. The clock sample is
+read from the sampled column, never inferred as 1 from a posedge witness. Existing
+raw fields remain available. IDs address retained display rows, not a complete
+dependency inventory; trimming can remove rows and makes their IDs unavailable.
+
+Clients can keep the original tool response and call
+`src.property_evidence.resolve_property_evidence(result, references)` with
+`references={"check_id": ..., "signal_evidence_ids": [...],
+"expression_evidence_ids": [...]}` selected by the model. This pure helper
+assembles separate `signal_facts` and `expression_facts` from the retained facts,
+preserving binary X/Z, ordered selections, raw-fs time and sampling phase. It
+performs no I/O, uses no live store, checks cancellation and rejects foreign,
+changed, removed, duplicate or mistyped references (at most 256 references / 4,096
+catalog records). Hashes detect receipt mutation, not authenticate user-supplied
+replacement results: the client must supply its own original tool response.
+Client integration is required to assemble final facts without model rewriting;
+ordinary MCP clients continue to receive additive IDs alongside the existing
+values. A resolved fact remains evidence from that query, not a new observation
+of a potentially changed waveform file.
 Semantic failure and simulator reporting time are retained separately. Complete
 disjoint endpoint inventories can establish an impossible intersection at its
 start. If a log identifies the same attempt, a false prefix at or before its

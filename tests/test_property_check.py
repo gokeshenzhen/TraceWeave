@@ -158,6 +158,23 @@ async def test_sampled_value_display_trims_before_dropping_attempts(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_constant_property_exposes_an_actual_clock_sample_for_reference_assembly(tmp_path):
+    from src.property_evidence import resolve_property_evidence
+    handle=await plan("1'b0",declarations='logic clk;')
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=wave(tmp_path),property_plan=handle,
+        failure_event=dict(time_ps=5,instance_path='top.ap',structured_fields={'start_time_ps':5})))
+    assert result.status=='failure_reproduced',result
+    clock=result.attempts[0]['clock_sample']
+    assert clock['signal']=='top.clk' and clock['value']['bin']=='0'
+    refs=dict(check_id=result.evidence_context['check_id'],signal_evidence_ids=[clock['evidence_id']],
+              expression_evidence_ids=[result.attempts[0]['evidence'][0]['evidence_id']])
+    assembled=resolve_property_evidence(result,refs)
+    assert assembled['signal_facts'][0]['sample_phase']=='before'
+    assert assembled['expression_facts'][0]['value']['bin']=='0'
+    assert 'signal' not in assembled['expression_facts'][0]
+
+
+@pytest.mark.anyio
 async def test_matching_samples_do_not_become_a_global_pass(tmp_path):
     handle=await plan()
     result=await server._dispatch('verify_window',dict(mode='property',wave_path=wave(tmp_path,[
