@@ -2726,6 +2726,7 @@ class PropertyCheckResult(SchemaModel):
     work_steps: int = 0
     match_count: int = 0
     output_truncated: bool = False
+    suggested_next_action: dict[str,Any] | None = None
     error_code: str | None = None
 
 

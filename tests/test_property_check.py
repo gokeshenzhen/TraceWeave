@@ -98,6 +98,63 @@ async def test_scope_and_fixed_selection_bindings(tmp_path):
         failure_time_ps=35,property_bindings={'clk':{'path':'top.clk','bits':[0]},
             'req':'top.req','ack':{'path':'top.ack','bits':[0]}}))
     assert result.status=='failure_reproduced',result
+    assert all('@bits(' not in v['signal'] and 'bits' not in v
+               for v in result.attempts[0]['sampled_values'])
+
+
+@pytest.mark.anyio
+async def test_sampled_operands_retain_reordered_dump_selection(tmp_path):
+    path=tmp_path/'selected.vcd'
+    path.write_text(_build_vcd([dict(bus=10)],[('!','clk',1),('#','bus',4)]))
+    handle=await plan('data==3',declarations='logic clk; logic [1:0] data;')
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=str(path),property_plan=handle,
+        failure_event=dict(time_ps=5,instance_path='top.ap',structured_fields={'start_time_ps':5}),
+        property_bindings={'data':dict(path='top.bus',bits=[1,3])}))
+    assert result.status=='not_reproduced',result
+    observed=result.attempts[0]['sampled_values']
+    assert len(observed)==1
+    assert observed[0]['signal']=='top.bus' and observed[0]['bits']==[1,3]
+    assert observed[0]['value']['bin']=='11' and observed[0]['time_fs']==5000
+
+
+@pytest.mark.anyio
+async def test_missing_history_is_not_a_missing_dump_signal(tmp_path):
+    handle=await plan('req |-> $past(ack)')
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=wave(tmp_path),property_plan=handle,
+        failure_event=dict(time_ps=5,instance_path='top.ap',structured_fields={'start_time_ps':5})))
+    assert result.status=='insufficient_evidence'
+    assert 'history_before_capture_unavailable' in result.gap_codes
+    assert 'property_history_value_unavailable' in result.gap_codes
+    assert 'signal_not_dumped' not in result.gap_codes
+    assert {v['signal'] for v in result.attempts[0]['sampled_values']}=={'top.req','top.ack'}
+
+
+@pytest.mark.anyio
+async def test_pending_cutoff_suggests_bounded_samples_without_changing_verdict(tmp_path):
+    handle=await plan('req |=> ack');path=wave(tmp_path)
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=path,property_plan=handle,
+        failure_event=dict(time_ps=5,instance_path='top.ap',structured_fields={'start_time_ps':5})))
+    assert result.status=='insufficient_evidence' and result.attempts[0]['status']=='pending'
+    assert result.sampling['read_end_ps']==5
+    assert 'property_pending_at_report_cutoff' in result.gap_codes
+    action=result.suggested_next_action
+    tool=next(t for t in await server.list_tools() if t.name==action['tool'])
+    Draft202012Validator(tool.inputSchema).validate(action['arguments'])
+    observed=await server._dispatch(action['tool'],action['arguments'])
+    assert not getattr(observed,'error_code',None),observed
+    assert action['arguments']['sample_phase']=='before' and action['arguments']['num_cycles']<=256
+
+
+@pytest.mark.anyio
+async def test_sampled_value_display_trims_before_dropping_attempts(tmp_path):
+    handle=await plan('req[*30]')
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=wave(tmp_path,[dict(req=1,ack=0)]*30),
+        property_plan=handle,max_output_bytes=4096,
+        failure_event=dict(time_ps=295,instance_path='top.ap',structured_fields={'start_time_ps':5})))
+    assert result.status=='not_reproduced' and result.coverage_status=='complete',result
+    assert len(result.attempts)==1 and not result.attempts_truncated
+    assert result.output_truncated and result.attempts[0]['sampled_values_truncated']
+    assert len(result.model_dump_json().encode())<=4096
 
 
 @pytest.mark.anyio

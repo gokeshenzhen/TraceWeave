@@ -110,6 +110,57 @@ def test_sampled_history_is_shared_across_attempts_and_capture_cutoffs_are_expli
     assert 'history_before_capture_unavailable' in engine.gaps
 
 
+def test_operand_observations_are_distinct_from_compound_expression_results():
+    result=make('$onehot0(data) && a',[dict(data=3,a=1)]).attempt(0)
+    assert result['status']=='false'
+    assert result['evidence'][0]['value']['bin']=='0'
+    facts={v['source'].rsplit('.',1)[-1]:v['value']['bin'] for v in result['sampled_values']}
+    assert facts==dict(data='0011')  # The short-circuited operand was not read.
+
+
+@pytest.mark.parametrize('bits',['x','z'])
+def test_observed_four_state_values_are_not_missing_evidence(bits):
+    engine=make('$isunknown(data)',[dict(data=bits)])
+    result=engine.attempt(0)
+    assert result['status']=='true'
+    assert result['sampled_values'][0]['value']['bin']==bits*4
+    assert 'signal_not_dumped' not in engine.gaps
+
+
+def test_history_observations_use_original_ticks_and_never_invent_missing_samples():
+    engine=make('$past(data)==data',[dict(data=3),dict(data=4)])
+    result=engine.attempt(1)
+    assert result['status']=='false'
+    assert {(v['time_ps'],v['value']['bin']) for v in result['sampled_values']}=={(5,'0011'),(15,'0100')}
+    result=engine.attempt(0)
+    assert result['status']=='unknown'
+    assert [(v['time_ps'],v['value']['bin']) for v in result['sampled_values']]==[(5,'0011')]
+    assert 'history_before_capture_unavailable' in engine.gaps
+    assert 'property_history_value_unavailable' in engine.gaps
+    assert 'signal_not_dumped' not in engine.gaps
+    missing=make('a |-> b',[dict(a=1,b=None)])
+    assert missing.attempt(0)['status']=='unknown'
+    assert 'signal_not_dumped' in missing.gaps
+
+
+def test_sample_display_budget_and_prefix_probes_do_not_change_semantics():
+    engine=make('a |=> b',[dict(a=1,b=0),dict(a=0,b=1)],max_evidence=1)
+    result=engine.attempt(0)
+    assert result['status']=='true' and not result['analysis_limited']
+    assert len(result['sampled_values'])==1 and result['sampled_values_truncated']
+    engine=make('a',[dict(a=1),dict(a=1)])
+    raw=next(n for n in engine.nodes.values() if n['op']=='sample')['facts']['expression']['execution']['expression']
+    engine.probing=True
+    engine.read(raw,0,{})
+    assert not engine.sampled_values
+    engine.probing=False
+    # Wide vectors are retained as binary, with a separate 64KiB display cap.
+    shape=engine.plan['signals']['__tw_property.a'];shape.update(width=32768,bits=list(range(32767,-1,-1)))
+    for row in engine.samples:row['signals']['__tw_property.a']={'bin':'1'*32768}
+    engine.read(raw,0,{});engine.read(raw,1,{})
+    assert len(engine.sampled_values)==1 and engine.sampled_values_truncated
+
+
 def test_first_history_uses_declaration_default_and_vector_edges_use_lsb():
     declarations='logic clk; logic [3:0] data=0;'
     rose=make('$rose(data)',[dict(data=2),dict(data=3)],declarations=declarations,history_complete=True)

@@ -266,9 +266,11 @@ def _async_controls(parser,plan,keys,engine,start,end,deadline):
                         # observes the preponed state of this physical time slot,
                         # rather than retaining the last assertion clock sample.
                         observed=evaluate(engine._expr(history['expression']),lambda p:sample(p,pre_states))
-                        return dict(value=observed.value)
+                        return dict(value=observed.value,gaps=observed.gaps,
+                                    unavailable_reason='property_history_value_unavailable')
                     value=engine.history(part.signal,tick,{}) if tick>=0 else None
-                    return dict(value=None if value is None else value.bits)
+                    return dict(value=None if value is None else value.bits,
+                                unavailable_reason='property_history_value_unavailable')
                 bits=values.get(part.signal);shape=plan['signals'][part.signal]
                 if bits is None:return dict(value=None)
                 positions={bit:i for i,bit in enumerate(shape['bits'])}
@@ -296,7 +298,20 @@ def _trim(result,max_bytes):
         attempt['evidence']=[];attempt['evidence_truncated']=True
         attempt['obligations']=[];attempt['obligations_truncated']=True
         if size()<=max_bytes:return result
+        observed=attempt.get('sampled_values',[])
+        if observed:
+            attempt['sampled_values']=[];attempt['sampled_values_truncated']=True
+            if size()<=max_bytes:
+                lo,hi=0,len(observed)
+                while lo<hi:
+                    check_cancelled();mid=(lo+hi+1)//2
+                    attempt['sampled_values']=observed[:mid]
+                    if size()<=max_bytes:lo=mid
+                    else:hi=mid-1
+                attempt['sampled_values']=observed[:lo]
+                return result
     result['bindings']=[];result['bindings_truncated']=True
+    result['suggested_next_action']=None
     while result['attempts'] and size()>max_bytes:
         result['attempts'].pop();result['attempts_truncated']=True
     if size()>max_bytes:raise ValueError('property_output_limit')
@@ -360,6 +375,11 @@ def check_property(parser,plan,options,event,*,deadline):
     for i in candidates:
         check_cancelled()
         attempt=engine.attempt(i)
+        for observed in attempt['sampled_values']:
+            projection=adapter.projections[keys[observed['source']]]
+            observed['signal']=projection.path
+            if projection.selection.bits!=projection.declared.indices:
+                observed['bits']=list(projection.selection.bits)
         attempt['start_time_ps']=times[i]
         end=attempt['end_index']
         raw_end=attempt.get('end_time_fs')
@@ -390,11 +410,27 @@ def check_property(parser,plan,options,event,*,deadline):
         sampling=dict(phase='before',offset_ps=0,time_domain='raw_fs',
             equivalence='physical_pre_edge; simulator_delta_regions_not_recorded',
             async_sampled='pre_timestamp_group_witnesses',
+            expression_values='evaluated_expression_results; not raw signal values',
+            sampled_values='raw bound input reads; bounded, not an exhaustive dependency inventory',
+            missing_values='unavailable evidence is not an observed X/Z value',
             history_start_ps=start,read_end_ps=fail,actual_simulation_end='not_assumed'),
         bindings=bindings,bindings_truncated=False,attempts=attempts,attempts_truncated=False,
         reproduced_count=reproduced,gap_codes=sorted(engine.gaps),
         work_steps=engine.work,match_count=engine.match_count,output_truncated=False)
     if not complete:result['gap_codes'].append('property_candidate_history_incomplete')
+    if any(a['status']=='pending' for a in attempts):
+        result['gap_codes'].append('property_pending_at_report_cutoff')
+        def selection(key):
+            p=adapter.projections[key]
+            return p.path if p.selection.bits==p.declared.indices else dict(path=p.path,bits=list(p.selection.bits))
+        result['suggested_next_action']=dict(tool='get_signals_by_cycle',
+            reason='property_pending_at_report_cutoff',
+            note='Inspect the same attempt beyond the report cutoff if captured. Check coverage and temporal endpoints; pending is not a pass, and later failure is not failure at the reported timestamp.',
+            arguments=dict(wave_path=options.wave_path,clock_path=selection(keys[source]),
+                signal_paths=[selection(k) for k in dict.fromkeys(keys.values())],edge=edge,
+                start_time_ps=max(0,min(a['start_time_ps'] for a in attempts)-1),
+                cycle_index_origin='window',num_cycles=min(256,options.max_edges,max(16,(maximum or 0)+(history or 0)+1)),
+                sample_phase='before',sample_offset_ps=0))
     if before!=file_identity(options.wave_path):raise ValueError('property_wave_identity_changed')
     for source,key in keys.items():
         adapter._validate(adapter.projections[key])

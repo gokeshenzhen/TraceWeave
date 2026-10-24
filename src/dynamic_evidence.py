@@ -245,7 +245,7 @@ def evaluate(expr: Expr, sample: Callable[[Expr], dict], role="data") -> Evaluat
             value = bit_value(fact.get("value"), node.width)
             gaps = list(fact.get("gaps", ()))
             if value is None:
-                gaps.append("signal_not_dumped")
+                gaps.append(fact.get("unavailable_reason") or "signal_not_dumped")
             elif not known(value):
                 gaps.append("value_unknown")
             if value is not None and node.two_state:

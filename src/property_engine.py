@@ -61,6 +61,7 @@ class PropertyEngine:
         self.max_work,self.max_matches=max_work,max_matches
         self.work=self.match_count=0
         self.max_evidence=max_evidence;self.evidence=[];self.evidence_truncated=False
+        self.sampled_values={};self.sampled_bytes=0;self.sampled_values_truncated=False
         self.obligations=[];self.obligations_truncated=False
         self.gaps=set();self.history_cache={};self.expr_cache={};self.seq_cache={}
         self.locals={v['symbol']:v for v in plan.get('variables',[])}
@@ -105,15 +106,29 @@ class PropertyEngine:
             self.charge()
             if node.signal.startswith('@history:'):
                 value=self.history(node.signal,tick,env)
-                return {'value':None if value is None else value.bits}
+                return {'value':None if value is None else value.bits,
+                        'unavailable_reason':'property_history_value_unavailable'}
             if node.signal in self.locals:
                 value=env.get(node.signal)
-                return {'value':None if value is None else value.bits}
+                return {'value':None if value is None else value.bits,
+                        'unavailable_reason':'property_local_value_unavailable'}
             value=self.samples[tick]['signals'].get(node.signal)
             bits=value.get('bin') if isinstance(value,dict) else value
             shape=self.plan['signals'].get(node.signal)
             if bits is None or shape is None or len(bits)!=shape['width']:
                 return {'value':None}
+            # Preserve the bound input vector, separately from the evaluated
+            # expression result. Prefix probes must not invent dependencies.
+            key=(tick,node.signal)
+            if not self.probing and key not in self.sampled_values:
+                cost=128+len(bits)+len(node.signal.encode())
+                if len(self.sampled_values)<self.max_evidence and self.sampled_bytes+cost<=65536:
+                    self.sampled_values[key]=dict(source=node.signal,tick=tick,
+                        time_ps=self.samples[tick]['time_ps'],
+                        time_fs=self.samples[tick].get('time_fs',self.samples[tick]['time_ps']*1000),
+                        value={'bin':bits})
+                    self.sampled_bytes+=cost
+                else:self.sampled_values_truncated=True
             positions={bit:i for i,bit in enumerate(shape['bits'])}
             try:bits=''.join(bits[positions[b]] for b in node.bits)
             except KeyError:return {'value':None}
@@ -589,6 +604,7 @@ class PropertyEngine:
     def attempt(self,start):
         self.seq_cache.clear()
         self.evidence=[];self.obligations=[];self.evidence_truncated=False;self.obligations_truncated=False
+        self.sampled_values={};self.sampled_bytes=0;self.sampled_values_truncated=False
         try:
             result=self.property(self.plan['root'],start)
             result=self._settle(self.plan['root'],start,{},result)
@@ -599,4 +615,5 @@ class PropertyEngine:
             end_time_fs=result.time_fs,
             vacuous=result.vacuous,reason=result.reason,analysis_limited=limited,
             evidence=list(self.evidence),evidence_truncated=self.evidence_truncated,
+            sampled_values=list(self.sampled_values.values()),sampled_values_truncated=self.sampled_values_truncated,
             obligations=list(self.obligations),obligations_truncated=self.obligations_truncated)

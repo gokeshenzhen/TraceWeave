@@ -1761,6 +1761,19 @@ IDs. It does not redefine legacy `holds`/`vacuous`. Non-reproduction is local to
 supplied failure; a positive failure under partial coverage remains a local fact.
 Pending attempts, missing evidence and limits never become a global pass.
 Attempt endpoints retain `end_time_fs` alongside ceiling-rounded `end_time_ps`.
+Per-attempt `sampled_values` retains actual bound input vectors separately from
+evaluated expression results, with dump paths, physical sample times and ordered
+bits for partial or reordered bindings. X/Z remains literal four-state data;
+unavailable history or local values have specific gap codes rather than implying
+an absent dump signal. These observations are bounded direct reads, not a complete
+dependency inventory (cached history and asynchronous timelines are separate).
+At most 256 observations / 64 KiB of estimated observation data are retained per
+attempt, without numeric expansion of wide vectors. Prefix probes add no display
+observations. Output trimming drops display rows before dropping whole attempts;
+display caps do not alter matching or coverage. Pending attempts at the report
+cutoff retain `insufficient_evidence` and can suggest a bounded
+`get_signals_by_cycle` query for the same attempt beyond that cutoff. The suggestion
+does not run automatically or certify a later failure at the supplied report time.
 Semantic failure and simulator reporting time are retained separately. Complete
 disjoint endpoint inventories can establish an impossible intersection at its
 start. If a log identifies the same attempt, a false prefix at or before its
