@@ -1696,6 +1696,18 @@ or establish its runtime activation; `runtime_analysis` remains `not_performed`.
 Unsupported values, recursive references, unresolved semantics and clocks outside
 the supported direct single-bit clock shape return explicit preparation gaps.
 
+`src/property_engine.py` is the internal single-clock matching layer over typed
+samples. Sequence matches retain endpoints and branch-private locals; implication
+checks every antecedent match, while consequent alternatives are existential.
+It handles concatenation, bounded and occurrence repetition, first-match ties,
+throughout, intersect/and/within, sampled history and separate asynchronous abort
+timelines. Missing evidence stays distinct from observed X/Z. Decisive-prefix
+probes locate completion before later resets or impossible endpoint joins can
+distort failure time; probes share the request's work/deadline/match budgets.
+Display trimming does not stop analysis. Default bounds are 200,000 work steps,
+16,384 cumulative matches and 256 evidence rows; cutoff and actual simulation end
+remain separate. This layer performs no waveform I/O or source parsing.
+
 Limits: 16 items and 16 shared units; 64 Ki characters per text/declaration and 256 KiB
 total text; 16 KiB argument text per item; 256 captured source inputs / 32 MiB; default
 1,024 temporal nodes per item (maximum 4,096), depth 64 (maximum 128), and bounded AST
