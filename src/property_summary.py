@@ -75,6 +75,18 @@ def summarize_property(result, max_lines=32):
                        'Matching and obligation rules below are scoped to one supplied start.')
     elif kind:
         context.append('[activation] Source activation is unresolved; do not assume a new attempt at every clock tick.')
+    completion=result.get('directive',{}).get('completion_policy',{})
+    strength=completion.get('default_sequence_strength')
+    if strength=='weak':
+        context.append('[completion] This assert/assume uses WEAK for unqualified sequence properties. '
+            'Explicit strong/weak overrides the default. Requested window end and actual simulation end are different; '
+            'the enclosing property operators still apply.')
+    elif strength=='strong':
+        context.append('[completion] This calling statement uses STRONG for unqualified sequence properties; '
+                       'explicit strength overrides the default. Rules below describe source semantics, not observed callbacks.')
+    elif strength=='caller_dependent':
+        context.append('[completion] Unqualified sequence strength needs the calling statement: '
+            'assert/assume property defaults to weak, other property statements to strong. Explicit strength is retained below.')
     clocks = result.get('clocks', [])
     for clock in clocks[:4]:
         context.append(f"[clock {clock['id']}] {_label(clock['event'])}; inherited delays use this clock's sampling ticks. "
@@ -97,6 +109,8 @@ def summarize_property(result, max_lines=32):
             calls.extend(_sampled_calls(value))
         important = (node['op'] not in {'sample', 'clock', 'reference'} or
                      'repetition' in facts or bool(calls) or facts.get('back_to') is not None)
+        if facts.get('sequence_property') and node['domain']=='sequence':
+            important=True
         explanation = node['explanation']
         if facts.get('match_items'):
             effects = facts['match_items']
@@ -107,6 +121,17 @@ def summarize_property(result, max_lines=32):
             if len(calls) > 4:
                 rules.append('Additional sampled-function rules are retained in the full node facts.')
             explanation = ' '.join(([explanation] if important and node['op'] != 'sample' else []) + rules)
+        sequence=facts.get('sequence_property',{})
+        strength=sequence.get('effective_strength')
+        if strength=='weak':
+            explanation += (' This sequence is WEAK: failure needs a finite bad prefix making every legal future match '
+                'for this start impossible. If a future match remains possible, missing completion means pending; '
+                'even at actual simulation end, missing completion ALONE is not failure of this weak sequence property.')
+        elif strength=='strong':
+            explanation += (' This sequence is STRONG: a nonempty completing match is required. '
+                'An unfinished sequence is not satisfied at actual simulation end; a requested window cutoff alone is not that event.')
+        elif strength=='caller_dependent':
+            explanation += ' This unqualified sequence needs the calling statement to select weak or strong completion.'
         if explanation:
             line = f"[{node['id']}] {_label(node['source'].get('text', ''))}: {explanation}"
             if important:

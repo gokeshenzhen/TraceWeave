@@ -332,11 +332,15 @@ def explain(payload):
             if isinstance(obj,ast.ImmediateAssertionStatement):
                 result['directive']['default_disable']=None
                 result['directive']['form']='immediate'
+                from src.property_completion import completion_policy
+                result['directive']['completion_policy']=completion_policy(result['directive'])
                 result['directive']['phase']='postponed' if obj.isFinal else ('observed_deferred' if obj.isDeferred else 'procedural_statement')
                 n=projector.add(obj,'immediate','value',None,{'expression':projector.value(obj.cond)},
                                 'Check this value when procedural control reaches the assertion; this is not a concurrent temporal property.')
             else:
                 result['directive']['form']='expect' if obj.assertionKind.name=='Expect' else 'concurrent'
+                from src.property_completion import completion_policy
+                result['directive']['completion_policy']=completion_policy(result['directive'])
                 if obj.assertionKind.name=='Expect':
                     result['directive']['activation']['blocking']='procedure_waits_for_pass_or_fail; no_implicit_repeated_attempts'
                 n=projector.project(obj.propertySpec,'sequence' if obj.assertionKind.name=='CoverSequence' else 'property',default_clock)

@@ -254,6 +254,64 @@ def test_concurrent_and_always_activation_have_distinct_schedules():
     assert fragment['directive']['activation']['schedule']['policy']=='caller_activation_required'
 
 
+@pytest.mark.parametrize('directive,strength',[
+    ('assert property','weak'),('assume property','weak'),
+    ('cover property','strong'),('expect','strong')])
+def test_sequence_property_default_completion_follows_the_calling_statement(directive,strength):
+    r=complete(directive+'(a[->2]);')
+    assert r['directive']['completion_policy']['default_sequence_strength']==strength
+    rule=node(r,'sample')['facts']['sequence_property']
+    assert rule['effective_strength']==strength
+    assert rule['runtime_outcome']=='not_evaluated'
+    assert rule['finite_bad_prefix']=='all_legal_future_matches_for_this_sequence_start_are_impossible'
+
+
+@pytest.mark.parametrize('text',['a[->2]','property p; a[->2]; endproperty'])
+def test_bare_fragment_or_definition_does_not_inherit_its_synthetic_assert_strength(text):
+    r=complete(text)
+    policy=r['directive']['completion_policy']
+    assert policy['default_sequence_strength']=='caller_dependent'
+    assert policy['calling_statement_defaults']['assert_property']=='weak'
+    assert node(r,'sample')['facts']['sequence_property']['effective_strength']=='caller_dependent'
+
+
+def test_explicit_strength_overrides_the_assert_default_without_leaking_into_sequence_components():
+    r=complete('assert property(strong(a[->2] ##1 b));')
+    assert r['directive']['completion_policy']['default_sequence_strength']=='weak'
+    assert node(r,'strong')['facts']['sequence_property']['effective_strength']=='strong'
+    assert all('sequence_property' not in n['facts'] for n in r['nodes'] if n['op'] in {'concat','sample'})
+
+
+def test_sequence_completion_is_attached_to_consequent_property_not_antecedent_matches():
+    r=complete('assert property((a ##1 b) |=> c[->2]);')
+    imp=node(r,'NonOverlappedImplication')
+    ant=next(n for n in r['nodes'] if n['id']==imp['facts']['antecedent'])
+    con=next(n for n in r['nodes'] if n['id']==imp['facts']['consequent'])
+    assert 'sequence_property' not in ant['facts']
+    assert con['facts']['sequence_property']['effective_strength']=='weak'
+
+
+def test_no_completion_is_distinct_from_finite_bad_prefix_and_actual_end():
+    r=complete('assert property(a[=2:4]);')
+    rule=node(r,'sample')['facts']['sequence_property']
+    assert rule['failure_requires']=='finite_bad_prefix'
+    assert rule['no_completion_yet']=='pending_if_a_legal_future_match_remains_possible'
+    assert rule['requested_window_cutoff']=='cutoff_alone_does_not_establish_completion_or_failure'
+    assert rule['unfinished_at_actual_simulation_end'].startswith('missing_completion_alone_is_not_failure')
+    assert any('missing completion ALONE is not failure' in s for s in r['summary'])
+    neg=complete('assert property(not a[->2]);')
+    assert any('Negate' in s for s in neg['summary'])
+    assert 'enclosing_operators_still_apply' in node(neg,'sample')['facts']['sequence_property']['scope']
+
+
+def test_sequence_cover_and_immediate_assertions_do_not_claim_sequence_property_default_strength():
+    cover=complete('cover sequence(a ##1 b);')
+    immediate=complete('assert(a);')
+    for r in [cover,immediate]:
+        assert r['directive']['completion_policy']['default_sequence_strength']=='not_applicable'
+        assert all('sequence_property' not in n['facts'] for n in r['nodes'])
+
+
 def test_summary_bounds_are_explicit_when_more_semantic_entries_exist():
     from src.property_summary import summarize_property
     r=complete('(a |-> b) and (b |-> c)')

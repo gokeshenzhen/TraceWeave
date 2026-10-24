@@ -228,6 +228,17 @@ async def test_summary_mode_retains_repetition_negation_and_sampled_history_with
 
 
 @pytest.mark.anyio
+async def test_summary_mode_exposes_completion_policy_without_claiming_a_runtime_verdict():
+    pytest.importorskip('pyslang')
+    r=await run({'text':'initial_assert: assert property(a[->2]);','unit':'u','units':[UNIT],'detail':'summary'})
+    item=r.results[0]
+    assert item.semantic_status=='complete' and not item.nodes
+    assert item.directive['completion_policy']['default_sequence_strength']=='weak'
+    assert item.directive['completion_policy']['runtime_outcome']=='not_evaluated'
+    assert any('missing completion ALONE is not failure' in s for s in item.summary)
+
+
+@pytest.mark.anyio
 async def test_source_binding_and_changed_input_do_not_advance_fallback(tmp_path,monkeypatch):
     pytest.importorskip('pyslang')
     source=tmp_path/'top.sv';source.write_text('module top; bit clk,a,b; ap: assert property(@(posedge clk) a |=> b); endmodule')

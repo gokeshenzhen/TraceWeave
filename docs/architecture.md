@@ -1608,6 +1608,18 @@ conditional reachability can still yield zero. For/while/repeat/do/foreach/forev
 loops retain unknown encounter counts instead of that bound. Counts are per
 elaborated site, not a whole-design total, and neither actual attempts nor start
 times are inferred from source. Clock advancement does not invent a new visit.
+`directive.completion_policy` states the calling-statement default for sequence
+properties. At each sequence-as-property boundary, `facts.sequence_property`
+records effective explicit/default strength, nonempty completion, finite-bad-prefix
+failure and unfinished/window-end rules. Assert/assume property uses weak by
+default; other property statements use strong. A definition or bare fragment keeps
+that default caller-dependent. Sequence cover and immediate assertions have
+separate source roles. These rules follow IEEE 1800-2017 section 16.12.2; an
+uncompleted weak sequence without a finite bad prefix is not a failure solely
+because simulation ends. A requested waveform cutoff does not prove the actual
+simulation end, and enclosing negation/abort/composition can change the whole
+property result. No per-run pending/pass/failure state or simulator reporting is
+inferred by this static service.
 
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block

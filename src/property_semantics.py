@@ -590,6 +590,12 @@ class Projector:
             out['domain'] = 'unresolved'
             self.missing('invalid_assertion' if k=='Invalid' else 'assertion_projection_unsupported',
                          'context' if k=='Invalid' else 'unsupported', f'Cannot project assertion node {k}.', expr)
+        # Strength belongs at a sequence-as-property boundary, not to every
+        # sequence component or to an implication antecedent.
+        if k=='StrongWeak' or (domain=='property' and (out['domain']=='sequence' or out['op']=='sample')):
+            from .property_completion import sequence_property_rules
+            facts['sequence_property']=sequence_property_rules(self.result.get('directive',{}),
+                explicit=out['op'] if k=='StrongWeak' else None)
         if (facts.get('repetition', {}).get('empty_match_allowed') or
                 any(c in self.empty_repetition_subtrees for c in out['children'])):
             self.empty_repetition_subtrees.add(out['id'])
