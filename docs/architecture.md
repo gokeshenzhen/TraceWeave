@@ -1601,6 +1601,13 @@ type, separately from a function's return type. Integral defaults up to 4,096
 bits are exposed as frontend-derived literals, never observed runtime values.
 Summaries contain at most 32 entries and explicitly mark further omitted rules;
 `detail=full` retains the supporting graph. Compact display is not a runtime verdict.
+`directive.activation.schedule` separates leading-clock declarations, procedural
+encounters and caller-supplied fragment activation. An initial site without an
+enclosing runtime repetition has a source-site encounter upper bound of one;
+conditional reachability can still yield zero. For/while/repeat/do/foreach/forever
+loops retain unknown encounter counts instead of that bound. Counts are per
+elaborated site, not a whole-design total, and neither actual attempts nor start
+times are inferred from source. Clock advancement does not invent a new visit.
 
 Local variables belong to attempts and matching branches. A separate definite-flow
 pass checks incoming alternatives and zero repetitions; parallel writes that block

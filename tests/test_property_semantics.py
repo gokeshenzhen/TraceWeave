@@ -215,9 +215,43 @@ def test_two_state_and_vector_history_defaults_follow_the_frontend_input_type():
 def test_summary_distinguishes_initial_activation_from_concurrent_declaration():
     initial=complete('module m; logic clk,a,b; initial begin ap: assert property(@(posedge clk) a |-> b); end endmodule')
     concurrent=complete('module m; logic clk,a,b; ap: assert property(@(posedge clk) a |-> b); endmodule')
-    assert any('InitialBlock' in s and 'do not themselves start fresh' in s for s in initial['summary'])
+    assert any('AT MOST ONE' in s and 'do not restart' in s for s in initial['summary'])
     assert any('new attempt at each leading clock event' in s for s in concurrent['summary'])
     assert any('Within ONE attempt' in s for s in initial['summary'])
+
+
+def test_initial_site_bound_is_not_an_observed_runtime_activation():
+    r=complete('module m; bit clk,a,b; initial if(a) ap: assert property(@(posedge clk) b); endmodule')
+    s=r['directive']['activation']['schedule']
+    assert s['policy']=='at_most_one_initial_encounter'
+    assert s['max_site_encounters_per_process_start']==1
+    assert s['zero_encounters_possible']
+    assert s['actual_attempt_count']==s['first_start_time']=='not_observed'
+
+
+@pytest.mark.parametrize('body,control',[
+    ('repeat(2) ap: assert property(@(posedge clk) a);','RepeatLoopStatement'),
+    ('while(a) ap: assert property(@(posedge clk) a);','WhileLoopStatement'),
+    ('do ap: assert property(@(posedge clk) a); while(a);','DoWhileStatement'),
+    ('forever ap: assert property(@(posedge clk) a);','ForeverStatement'),
+    ('for(int i=0;i<2;i++) ap: assert property(@(posedge clk) a);','ForLoopStatement'),
+    ('foreach(v[i]) ap: assert property(@(posedge clk) a);','ForeachLoopStatement')])
+def test_initial_loop_is_never_misclassified_as_one_encounter(body,control):
+    r=complete('module m; bit clk,a; bit[1:0] v; initial '+body+' endmodule')
+    activation=r['directive']['activation'];schedule=activation['schedule']
+    assert any(c['kind']==control for c in activation['controls'])
+    assert schedule['policy']=='per_procedural_encounter'
+    assert schedule['max_site_encounters_per_process_start'] is None
+    assert not any('AT MOST ONE' in s for s in r['summary'])
+
+
+def test_concurrent_and_always_activation_have_distinct_schedules():
+    decl=complete('module m; bit clk,a; ap: assert property(@(posedge clk) a); endmodule')
+    proc=complete('module m; bit clk,a; always @(posedge clk) ap: assert property(a); endmodule')
+    assert decl['directive']['activation']['schedule']['policy']=='each_leading_clock_event'
+    assert proc['directive']['activation']['schedule']['policy']=='per_procedural_encounter'
+    fragment=complete('a')
+    assert fragment['directive']['activation']['schedule']['policy']=='caller_activation_required'
 
 
 def test_summary_bounds_are_explicit_when_more_semantic_entries_exist():

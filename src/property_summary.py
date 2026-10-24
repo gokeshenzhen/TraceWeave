@@ -56,7 +56,13 @@ def summarize_property(result, max_lines=32):
     activation = result.get('directive', {}).get('activation', {})
     kind = activation.get('kind')
     if kind == 'procedural':
-        context.append('[activation] ' + activation['procedure'] +
+        schedule=activation.get('schedule', {})
+        if schedule.get('policy')=='at_most_one_initial_encounter':
+            context.append('[activation] Initial assertion site: AT MOST ONE procedural encounter per instance '
+                '(no enclosing runtime repetition). If that initial attempt has finished, later clock ticks do not restart it. '
+                'Reachability, runtime enablement and the actual start time are not observed.')
+        else:
+            context.append('[activation] ' + activation['procedure'] +
             ': activate when procedural control reaches this statement. Later clock ticks within an attempt '
             'do not themselves start fresh procedural activations; enclosing controls and runtime execution remain separate.')
         if activation.get('blocking'):

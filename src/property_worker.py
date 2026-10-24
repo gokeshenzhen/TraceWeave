@@ -175,19 +175,55 @@ def _qualified_condition(expr,scope,projector):
     return text.decode()
 
 
+_RUNTIME_REPETITION = frozenset({'ForLoopStatement','LoopStatement','WhileLoopStatement','RepeatLoopStatement',
+    'DoWhileStatement','ForeachLoopStatement','ForeverStatement','RandSequenceStatement'})
+
+
+def _activation_schedule(row):
+    """Source-site encounter bounds, never observed runtime attempt counts."""
+    schedule=dict(scope='one_elaborated_assertion_site', actual_attempt_count='not_observed',
+                  first_start_time='not_observed')
+    k=row['kind']
+    if k=='none_definition_or_fragment':
+        schedule.update(policy='caller_activation_required',max_site_encounters_per_process_start=None,
+                        fresh_attempt_requires='caller_supplied_activation',basis='definition_or_fragment_only')
+    elif k=='concurrent_declaration':
+        schedule.update(policy='each_leading_clock_event',max_site_encounters_per_process_start=None,
+                        fresh_attempt_requires='leading_clock_event_subject_to_controls',basis='concurrent_declaration')
+    elif k=='procedural':
+        repeated=any(c['kind'] in _RUNTIME_REPETITION for c in row['controls'])
+        once=row['procedure']=='InitialBlock' and not repeated
+        schedule.update(policy='at_most_one_initial_encounter' if once else 'per_procedural_encounter',
+                        max_site_encounters_per_process_start=1 if once else None,
+                        fresh_attempt_requires='another_procedural_encounter',
+                        basis='initial_without_enclosing_runtime_repetition' if once else
+                              ('enclosing_runtime_repetition' if repeated else 'repeating_or_other_procedure'),
+                        zero_encounters_possible=True,
+                        clock_progression='clock_ticks_advance_an_existing_attempt; do_not_invent_new_procedural_encounters')
+    else:
+        schedule.update(policy='unresolved',max_site_encounters_per_process_start=None,
+                        fresh_attempt_requires='unknown',basis='source_activation_unresolved')
+    row['schedule']=schedule
+    return row
+
+
 def _activation(statement):
     syntax=statement.syntax.parent
     ancestors=[]
     while syntax is not None:
         k=kind(syntax)
-        if k in {'ConditionalStatement','CaseStatement','ForLoopStatement','WhileLoopStatement','RepeatLoopStatement','TimingControlStatement'}:
+        if k=='LoopStatement':
+            keyword=str(syntax.repeatOrWhile.valueText)
+            k={'while':'WhileLoopStatement','repeat':'RepeatLoopStatement'}.get(keyword,k)
+        if k in _RUNTIME_REPETITION or k in {'ConditionalStatement','CaseStatement','TimingControlStatement',
+                                             'WaitStatement','WaitOrderStatement','RandCaseStatement'}:
             ancestors.append({'kind':k,'source':str(syntax)[:2048]})
         if k=='ConcurrentAssertionMember':
-            return dict(kind='concurrent_declaration', trigger='each_leading_clock_event', controls=ancestors)
+            return _activation_schedule(dict(kind='concurrent_declaration', trigger='each_leading_clock_event', controls=ancestors))
         if k in {'InitialBlock','AlwaysBlock','FinalBlock'}:
-            return dict(kind='procedural', procedure=k, trigger='when_control_reaches_statement; concurrent_assertion_activation_uses_procedural_rules', controls=ancestors)
+            return _activation_schedule(dict(kind='procedural', procedure=k, trigger='when_control_reaches_statement; concurrent_assertion_activation_uses_procedural_rules', controls=ancestors))
         syntax=syntax.parent
-    return dict(kind='unresolved', controls=ancestors)
+    return _activation_schedule(dict(kind='unresolved', controls=ancestors))
 
 
 def _syntax_fallback(tree, projector):
@@ -290,7 +326,7 @@ def explain(payload):
                 result['diagnostics_truncated']=diag_limited
                 result['output_truncated']|=diag_limited
             directive='definition' if input_kind=='definition' else ('expression' if input_kind=='expression' else obj.assertionKind.name)
-            result['directive']=dict(kind=directive, activation=({'kind':'none_definition_or_fragment'}
+            result['directive']=dict(kind=directive, activation=(_activation_schedule({'kind':'none_definition_or_fragment'})
                                       if directive in {'definition','expression'} else _activation(obj)),
                                       runtime_enabled='not_observed', default_disable=default_disable)
             if isinstance(obj,ast.ImmediateAssertionStatement):
