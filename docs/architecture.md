@@ -1737,6 +1737,12 @@ candidate selection, per-attempt state, obligations, sampled values and source n
 IDs. It does not redefine legacy `holds`/`vacuous`. Non-reproduction is local to the
 supplied failure; a positive failure under partial coverage remains a local fact.
 Pending attempts, missing evidence and limits never become a global pass.
+Semantic failure and simulator reporting time are retained separately. Complete
+disjoint endpoint inventories can establish an impossible intersection at its
+start. If a log identifies the same attempt, a false prefix at or before its
+reported failure reproduces that attempt's violation; `report_timing_exact` and
+`report_alignment` record whether timestamps also coincide. An earlier failed
+candidate without logged start correlation remains insufficient evidence.
 
 Property defaults: 16,384 read edges (max 65,536), 1,024 candidate attempts
 (max 4,096), 200,000 work steps (max 2,000,000), 20 seconds total (max 120),

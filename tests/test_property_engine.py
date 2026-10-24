@@ -61,7 +61,7 @@ def test_all_antecedent_endpoints_but_first_match_selects_earliest():
     ('a throughout (b ##2 c)',[dict(a=1,b=1,c=0),dict(a=0,b=0,c=0),dict(a=1,b=0,c=1)],'false',1),
     ('a throughout (b ##2 c)',[dict(a=1,b=0,c=0),dict(a=1,b=0,c=0),dict(a=1,b=0,c=1)],'false',0),
     ('(a ##1 b) and (a ##3 c)',[dict(a=1,b=0,c=0),dict(a=0,b=1,c=0),dict(a=0,b=0,c=0),dict(a=0,b=0,c=1)],'true',3),
-    ('(a ##1 b) intersect (a ##3 c)',[dict(a=1,b=0,c=0),dict(a=0,b=1,c=0),dict(a=0,b=0,c=0),dict(a=0,b=0,c=1)],'false',1),
+    ('(a ##1 b) intersect (a ##3 c)',[dict(a=1,b=0,c=0),dict(a=0,b=1,c=0),dict(a=0,b=0,c=0),dict(a=0,b=0,c=1)],'false',0),
     ('(a ##1 b) intersect (a ##[1:3] c)',[dict(a=1,b=0,c=0),dict(a=0,b=1,c=1),dict(a=0,b=0,c=0)],'true',1),
     ('(a ##1 b) within (c ##3 c)',[dict(a=0,b=0,c=1),dict(a=1,b=0,c=0),dict(a=0,b=1,c=0),dict(a=0,b=0,c=1)],'true',3),
     ('(a ##1 b) within (c ##3 c)',[dict(a=0,b=0,c=1),dict(a=1,b=0,c=0),dict(a=0,b=0,c=0),dict(a=0,b=0,c=1)],'false',3),
@@ -176,11 +176,17 @@ def test_later_reset_does_not_erase_a_completed_failure():
         [dict(a=1,b=0,c=0,rst=0),dict(a=0,b=1,c=0,rst=0),
          dict(a=0,b=0,c=0,rst=0),dict(a=0,b=0,c=1,rst=0)])
     node=next(n['id'] for n in engine.nodes.values() if n['op']=='disable_iff')
-    # The intersection is already impossible at tick1 (15ps). Reset at 20ps
-    # cannot disable that completed failure, even though c matches at tick3.
+    # Fixed disjoint endpoint sets make the intersection impossible at start.
+    # Reset at 20ps cannot disable that completed failure.
     engine.controls={node:[(0,Value('0')),(20000,Value('1'))]}
     result=engine.attempt(0)
-    assert result['status']=='false' and result['end_index']==1
+    assert result['status']=='false' and result['end_index']==0
+
+
+def test_static_disjoint_endpoints_fail_before_future_samples_exist():
+    r=make('a |-> ((a ##1 b) intersect (a ##3 c))',[dict(a=1,b=0,c=0)]).attempt(0)
+    assert r['status']=='false' and r['end_index']==0
+    assert r['reason']=='disjoint_sequence_endpoints'
 
 
 def test_engine_observes_cancellation():

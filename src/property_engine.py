@@ -36,6 +36,7 @@ class Matches:
     pending: bool = False
     unknown: bool = False
     dead_at: int | None = None
+    reason: str = ''
 
 
 @dataclass
@@ -65,6 +66,7 @@ class PropertyEngine:
         self.locals={v['symbol']:v for v in plan.get('variables',[])}
         self.unknown_values=0
         self.probing=False
+        self.offset_cache={}
         self._validate_effects()
 
     def charge(self):
@@ -231,6 +233,10 @@ class PropertyEngine:
         if op=='Throughout':return self._throughout(n,start,env)
         if op=='Within':return self._within(n,start,env)
         if op in {'And','Or','Intersect'}:
+            if op=='Intersect':
+                left=self.possible_offsets(children[0]);right=self.possible_offsets(children[1])
+                if left is not None and right is not None and not left&right:
+                    return Matches(dead_at=start,reason='disjoint_sequence_endpoints')
             a=self.sequence(children[0],start,env);b=self.sequence(children[1],start,env)
             if op=='Or':
                 return Matches([*a.matches,*b.matches],a.pending or b.pending,a.unknown or b.unknown,
@@ -250,6 +256,48 @@ class PropertyEngine:
             return Matches(output,pending,unknown,self._latest(a.dead_at,b.dead_at,
                 *(m.end for m in a.matches),*(m.end for m in b.matches)))
         raise UnsupportedPlan('sequence_operator_unsupported:'+op)
+
+    def possible_offsets(self,key,base=False):
+        """A bounded superset of legal endpoint offsets, independent of values.
+
+        None means the static inventory is too large or unbounded. Only complete
+        disjoint endpoint inventories prove a statically impossible intersection.
+        """
+        cache=(key,base)
+        if cache in self.offset_cache:return self.offset_cache[cache]
+        self.charge();n=self.nodes[key];op=n['op'];f=n['facts'];children=n['children']
+        parts=[self.possible_offsets(c) for c in children]
+        if not base and f.get('repetition'):
+            rep=f['repetition'];lo=rep['count']['min'];hi=rep['count']['max']
+            body=self.possible_offsets(key,True)
+            if rep['kind']!='Consecutive' or hi is None or hi>256 or body is None:result=None
+            else:
+                result=set();current={-1}
+                for count in range(hi+1):
+                    self.charge()
+                    if count>=lo:result|=current
+                    if len(result)>4096:result=None;break
+                    if len(current)*len(body)>4096:result=None;break
+                    current={a+b+1 for a in current for b in body}
+        elif op=='sample':result={0}
+        elif op in {'clock','reference','first_match','match_items'}:result=parts[0] if parts else None
+        elif op=='concat':
+            result={0};joins={j['right']:j['delay'] for j in f['joins']}
+            for i,(child,part) in enumerate(zip(children,parts)):
+                delay=joins.get(child,dict(min=0,max=0))
+                lo,hi=delay['min'],delay['max']
+                if part is None or hi is None or len(result)*len(part)*(hi-lo+1)>4096:
+                    result=None;break
+                result={a+d+b for a in result for b in part for d in range(lo,hi+1)
+                        if not (i and d==0 and (a<0 or b<0))}
+        elif op=='Intersect' and None not in parts:result=parts[0]&parts[1]
+        elif op=='Or' and None not in parts:result=parts[0]|parts[1]
+        elif op=='And' and None not in parts:
+            result=None if len(parts[0])*len(parts[1])>4096 else {max(a,b) for a in parts[0] for b in parts[1]}
+        elif op in {'Throughout','Within'}:result=parts[-1]
+        else:result=None
+        self.offset_cache[cache]=result
+        return result
 
     @staticmethod
     def _latest(*ticks):
@@ -448,7 +496,8 @@ class PropertyEngine:
                 strength=op if op in {'strong','weak'} else f.get('sequence_property',{}).get('effective_strength')
                 if strength in {'strong','weak'}:return Outcome('false' if strength=='strong' else 'true',self.n-1,node_id)
             return Outcome('pending',node=node_id)
-        return Outcome('false',result.dead_at if result.dead_at is not None else start,node_id,reason='no_sequence_match')
+        return Outcome('false',result.dead_at if result.dead_at is not None else start,node_id,
+                       reason=result.reason or 'no_sequence_match')
 
     def _boolean(self,op,a,b,node):
         if op=='Implies':a=replace(a,status={'true':'false','false':'true'}.get(a.status,a.status));op='Or'

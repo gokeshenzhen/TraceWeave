@@ -257,3 +257,15 @@ async def test_cancelled_property_waiter_does_not_touch_parser(tmp_path,monkeypa
             release.set()
     finally:release.set()
     assert calls==[]
+
+
+@pytest.mark.anyio
+async def test_logged_attempt_correlates_an_earlier_semantic_failure(tmp_path):
+    handle=await plan('req |-> ((req ##1 ack) intersect (req ##3 ack))')
+    path=wave(tmp_path)
+    result=await server._dispatch('verify_window',dict(mode='property',wave_path=path,property_plan=handle,
+        failure_event=dict(time_ps=15,instance_path='top.ap',structured_fields={'start_time_ps':5})))
+    assert result.status=='failure_reproduced',result
+    attempt=result.attempts[0]
+    assert attempt['end_time_ps']==5 and not attempt['report_timing_exact']
+    assert attempt['report_alignment']=='same_logged_attempt'

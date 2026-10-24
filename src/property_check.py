@@ -328,11 +328,17 @@ def check_property(parser,plan,options,event,*,deadline):
         raw_end=attempt.get('end_time_fs')
         if raw_end is None and end is not None and 0<=end<len(times):raw_end=raw_times[end]
         attempt['end_time_ps']=(raw_end+999)//1000 if raw_end is not None else None
-        attempt['matches_failure_event']=attempt['status']=='false' and attempt['end_time_ps']==fail
+        same_tick=attempt['end_time_ps']==fail
+        same_attempt=started is not None and attempt['end_time_ps'] is not None and attempt['end_time_ps']<=fail
+        attempt['matches_failure_event']=attempt['status']=='false' and (same_tick or same_attempt)
+        attempt['report_timing_exact']=same_tick
+        attempt['report_alignment']='same_tick' if same_tick else 'same_logged_attempt' if same_attempt else 'not_aligned'
         reproduced+=int(attempt['matches_failure_event'])
         attempts.append(attempt)
         if attempt['analysis_limited']:complete=False;break
     uncertain=any(a['status'] in {'unknown','pending'} for a in attempts)
+    if started is None and any(a['status']=='false' and a['end_time_ps'] is not None and a['end_time_ps']<fail for a in attempts):
+        uncertain=True;engine.gaps.add('property_failure_attempt_correlation_required')
     status='failure_reproduced' if reproduced else 'not_reproduced' if complete and not uncertain else 'insufficient_evidence'
     if not candidates:status='insufficient_evidence'
     result=dict(mode='property',wave_path=options.wave_path,clock=bindings[list(keys).index(source)]['selection']['path'],
