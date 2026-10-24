@@ -183,3 +183,30 @@ async def test_active_property_reads_reap_workers_on_stop(tmp_path,monkeypatch,w
     if stop!='cancel':assert results[0]['error_code']==stop,results
     parser=server._get_parser(str(path))
     assert not parser._native_sessions and parser._active_batch is None
+
+
+@pytest.mark.anyio
+async def test_fst_plan_and_replay_over_stdio(tmp_path):
+    import json,os,sys
+    from pathlib import Path
+    import anyio
+    from mcp import ClientSession,StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    path,_=cycle_pair(tmp_path,dict(req=1,ack=1),[
+        dict(req=1,ack=0),dict(req=0,ack=1),dict(req=0,ack=0),dict(req=0,ack=0)])
+    params=StdioServerParameters(command=sys.executable,args=[str(Path(server.__file__).resolve())],
+        env={**os.environ,'TRACEWEAVE_TELEMETRY':'0'})
+    with anyio.fail_after(30):
+        async with stdio_client(params) as (read,write):
+            async with ClientSession(read,write) as client:
+                await client.initialize()
+                explained=await client.call_tool('explain_property',dict(text='req |-> ##3 ack',unit='u',
+                    units=[dict(id='u',declarations='logic clk,req,ack;',default_clock='posedge clk')],
+                    detail='summary',include_check_plan=True))
+                handle=json.loads(explained.content[0].text)['results'][0]['check_plan']['handle']
+                checked=await client.call_tool('verify_window',dict(mode='property',wave_path=str(path),
+                    property_plan=handle,failure_event=dict(time_ps=35,instance_path='top.ap')))
+                result=json.loads(checked.content[0].text)
+                assert not checked.isError and result['status']=='failure_reproduced',result
+                assert result['attempts'][0]['start_time_ps']==5
+                assert result['attempts'][0]['end_time_fs']==35000

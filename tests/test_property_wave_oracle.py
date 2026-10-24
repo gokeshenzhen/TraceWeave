@@ -1,6 +1,7 @@
 """Native assertion logs are independent references for waveform plan replay."""
 import asyncio
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -37,11 +38,22 @@ def fsdb_oracle(path):
     return current_cache().get('property-temporal-fsdb',inputs,build)/'oracle.fsdb'
 
 
+def fst_oracle(path):
+    from scripts.test_fixtures import current_cache,identity,run
+    converter=shutil.which('vcd2fst')
+    if converter is None:raise RuntimeError('native FST oracle requires vcd2fst on PATH')
+    inputs=identity([path/'oracle.vcd',converter],format='fst')
+    def build(directory):
+        return run([converter,path/'oracle.vcd',directory/'oracle.fst'],directory,timeout=30)
+    return current_cache().get('property-temporal-fst',inputs,build)/'oracle.fst'
+
+
 @pytest.mark.eda_integration
-@pytest.mark.parametrize('format',['vcd','fsdb'])
+@pytest.mark.parametrize('format',['vcd','fsdb','fst'])
 def test_vcs_native_outcomes_replay_over_waveform(format):
     path=build_oracle()
-    waveform=path/'oracle.vcd' if format=='vcd' else fsdb_oracle(path)
+    waveform={'vcd':lambda:path/'oracle.vcd','fsdb':lambda:fsdb_oracle(path),
+              'fst':lambda:fst_oracle(path)}[format]()
     events=SimLogParser(str(path/'sim.log'),'vcs').parse_failure_events()
     first={}
     for event in events:
@@ -62,6 +74,11 @@ def test_vcs_native_outcomes_replay_over_waveform(format):
             assert plan and plan['status']=='prepared',(name,explained)
             result=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],
                 wave_path=str(waveform),failure_event=event))
+            if format!='vcd':
+                reference=await server._dispatch('verify_window',dict(mode='property',property_plan=plan['handle'],
+                    wave_path=str(path/'oracle.vcd'),failure_event=event))
+                assert result.attempts==reference.attempts,(name,format,result,reference)
+                assert result.coverage_status==reference.coverage_status
             if name in first:
                 assert result.status=='failure_reproduced',(name,result)
                 assert result.reproduced_count>=1
