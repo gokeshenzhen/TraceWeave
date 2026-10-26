@@ -1714,18 +1714,17 @@ Simulation waveform debug workflow:
    - For large error counts (>100), use detail_level="summary" first, then inspect specific groups with get_error_context or detail_level="full".
    - Default detail_level is "summary" to keep MCP responses below harness budget.
 
-4. MUST call sweep_handshakes after parse_sim_log on a failing run that has a
-   waveform — before recommend, analyze_failures, or any manual waveform reading.
-   This is the runtime-layer counterpart of scan_structural_risks (step 2): a
-   default-flow protocol-health scan over every AHB and valid/ready interface in
-   ONE call, returning a per-interface stall/deadlock/payload-hold fact table
-   (facts to judge, not a verdict).
-   - A scoreboard/data-compare failure is frequently the symptom of a lower-level
-     protocol problem, so run this BEFORE reading RTL line-by-line or scrubbing the
-     waveform by hand.
-   - The structural-scan workflow setting does not affect this handshake step.
-     Do not skip by default. Skip only when
-     there is no waveform or the user explicitly asks.
+4. Choose waveform tools and their order from the current run, symptom and known
+   target. sweep_handshakes is an optional batch investigation, useful for opaque
+   timeout/hang or compare symptoms when the responsible interface is unknown.
+   - If the module is known, pass scope and an evidence-backed time window. If
+     the interface or signals are known, use inspect_handshake or targeted
+     waveform queries directly. Recommendation does not require a prior sweep.
+   - For build/elaboration failures, inspect the current diagnostics and source
+     inputs. A waveform from an earlier run does not establish behavior of the
+     changed source. Unknown run/phase association remains unknown.
+   - An unperformed sweep means protocol behavior is unchecked. Its absence or
+     incomplete coverage never requires automatic scanning or repeated retries.
    - Always interpret flagged_count together with coverage_status:
      zero_coverage means no protocol interfaces were checked and is NOT a pass;
      truncated/degraded means partial coverage, so flagged_count=0 is not a
@@ -10116,7 +10115,7 @@ async def _dispatch_inner(name: str, args: dict):
         scan_cache = _get_compatible_recommend_scan_cache(request_context)
         parse_cache = _get_compatible_recommend_parse_cache(request_context)
         sweep_cache = _get_compatible_recommend_sweep_cache(request_context)
-        from src.analyzer import select_primary_failure
+        from src.analyzer import select_primary_failure, _build_runtime_protocol_coverage
         observation = None
         if args.get("_native_query") is not None or args.get("_failure_events_observation") is not None:
             observation = await _run_in_cancellable_thread(lambda: observe_failure_events(
@@ -10165,45 +10164,34 @@ async def _dispatch_inner(name: str, args: dict):
             and result.get("suspected_failure_class") != "no_failure_detected"
         ):
             has_failure_context = True
-        # Single primary missing-step recommendation. On a scoreboard/compare/
-        # mismatch symptom the runtime handshake sweep leads (a data-compare
-        # mismatch is more often a runtime protocol symptom than a structural
-        # one); otherwise the structural scan leads. get_diagnostic_snapshot is
-        # the broader auditor that lists every missing step; this is the single
-        # prioritized nudge for an agent that called recommend directly. Both
-        # treat "failure context + no complete compatible sweep cache" as
-        # requiring attention. Only a parameter-changing retry is actionable;
-        # terminal zero/degraded coverage remains explicitly inconclusive but
-        # must not replay the same sweep forever.
+        # Sweep evidence is advisory. Preserve its coverage independently from
+        # required source/structural prerequisites and the chosen debug path.
+        result["runtime_protocol_coverage"] = _build_runtime_protocol_coverage(
+            sweep_cache.model_dump() if sweep_cache is not None else None,
+            wave_path=args["wave_path"],
+        )
         missing_scan = STRUCTURAL_SCAN_IN_WORKFLOW and scan_cache is None and has_failure_context
         if not STRUCTURAL_SCAN_IN_WORKFLOW and scan_cache is None:
             result.setdefault("why", []).append(
                 "Structural scanning is skipped in the default workflow by "
                 "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0; structural risks remain unchecked."
             )
-        sweep_needs_attention = (
-            _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        from src.log_parser import _protocol_symptom_hint
+        protocol_symptom = (_recommend_has_protocol_symptom(parse_cache)
+                            or _protocol_symptom_hint(events) is not None)
+        sweep_needs_attention = _sweep_coverage_incomplete(sweep_cache) and (
+            sweep_cache is not None or (has_failure_context and protocol_symptom)
         )
         sweep_call = (
-            _build_sweep_required_next_call(args["wave_path"], sweep_cache)
+            _build_sweep_suggested_call(args["wave_path"], sweep_cache)
             if sweep_needs_attention
             else None
         )
-        actionable_sweep = sweep_needs_attention and sweep_call is not None
-        protocol_symptom = _recommend_has_protocol_symptom(parse_cache)
-        primary_missing = _select_recommend_primary_missing_step(
-            missing_scan, actionable_sweep, protocol_symptom
-        )
-        if primary_missing == "sweep":
-            result["workflow_incomplete"] = True
-            result["degraded_reason"] = (
-                "missing_handshake_sweep"
-                if sweep_cache is None
-                else "incomplete_handshake_sweep"
-            )
-            result["required_next_call"] = sweep_call
-            result["missing_inputs"] = []
-        elif primary_missing == "scan":
+        if sweep_call is not None:
+            result.setdefault("suggested_next_actions", []).append(sweep_call)
+        elif sweep_needs_attention:
+            result.setdefault("why", []).append(_describe_non_actionable_sweep(sweep_cache))
+        if missing_scan:
             result["workflow_incomplete"] = True
             result["degraded_reason"] = "missing_structural_scan"
             result["required_next_call"] = _build_scan_required_next_call(
@@ -10211,11 +10199,6 @@ async def _dispatch_inner(name: str, args: dict):
                 request_context.get("simulator"),
             )
             result["missing_inputs"] = []
-        elif sweep_needs_attention:
-            result["workflow_incomplete"] = True
-            result["degraded_reason"] = "incomplete_handshake_sweep"
-            result["required_next_call"] = None
-            result["missing_inputs"] = [_describe_non_actionable_sweep(sweep_cache)]
         else:
             result["workflow_incomplete"] = False
             result["degraded_reason"] = None
@@ -10802,7 +10785,7 @@ def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) 
 
 
 def _extract_protocol_health_summary(result: schemas.HandshakeSweepResult) -> dict:
-    return schemas.ProtocolHealthSummary.model_validate({
+    summary = schemas.ProtocolHealthSummary.model_validate({
         "interfaces_inspected": result.interface_count,
         "flagged_count": result.flagged_count,
         "discovered_count": result.discovered_count,
@@ -10820,6 +10803,7 @@ def _extract_protocol_health_summary(result: schemas.HandshakeSweepResult) -> di
         "sampling_phase": result.sampling_phase,
         "skipped_count": len(result.skipped),
     }).model_dump(exclude_none=True)
+    return {**summary, "wave_path": result.wave_path, "facts_origin": "waveform", "optional": True}
 
 
 def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict:
@@ -10939,7 +10923,7 @@ def _sweep_coverage_incomplete(
     return sweep_result is None or sweep_result.coverage_status != "complete"
 
 
-def _build_sweep_required_next_call(
+def _build_sweep_suggested_call(
     wave_path: str | None,
     sweep_result: schemas.HandshakeSweepResult | None = None,
 ) -> dict | None:
@@ -10950,10 +10934,9 @@ def _build_sweep_required_next_call(
             "tool": "sweep_handshakes",
             "arguments": {"wave_path": wave_path},
             "reason": (
-                "Scoreboard/compare/mismatch failures are frequently a runtime protocol "
-                "symptom. Run the whole-design handshake sweep before reading RTL "
-                "line-by-line; it returns a per-interface stall/deadlock/payload-hold/"
-                "premature-valid-deassertion fact table in one call."
+                "Protocol behavior remains unchecked. For an unknown interface behind "
+                "a timeout/hang or compare symptom, consider a bounded handshake sweep. "
+                "Choose scope/window from evidence, or inspect a known interface directly."
             ),
         }
     if sweep_result.coverage_status == "complete":
@@ -11081,23 +11064,6 @@ def _recommend_has_protocol_symptom(
     }:
         return True
     return False
-
-
-def _select_recommend_primary_missing_step(
-    missing_scan: bool,
-    missing_sweep: bool,
-    protocol_symptom: bool,
-) -> str | None:
-    # Protocol symptom: sweep leads even when the structural scan is also
-    # missing. Otherwise the structural scan leads; sweep fills in when it is
-    # the only step still missing.
-    if missing_sweep and protocol_symptom:
-        return "sweep"
-    if missing_scan:
-        return "scan"
-    if missing_sweep:
-        return "sweep"
-    return None
 
 
 def _build_result_provenance(
@@ -11531,66 +11497,41 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             }
         )
 
-    # Whole-design protocol health (sweep_handshakes) — the runtime-layer
-    # counterpart of scan_structural_risks: a default-flow perception step whose
-    # facts the LLM judges. Recommended only when a waveform exists AND the run
-    # actually failed (a clean run or a log-less session needs no protocol scan).
+    # Optional protocol evidence remains visible independently of workflow
+    # completeness. An unchecked waveform never acquires a clean status.
     sweep_result = None if case_mismatch else _result_cache.get("sweep_handshakes")
     has_waveform = bool(sim_result is not None and sim_result.wave_files)
     sweep_failure_context = bool(
         compatible_log_result is not None
         and compatible_log_result.runtime_total_errors > 0
     )
-    sweep_wave_path = anchor.get("wave_path") if anchor is not None else None
+    sweep_wave_path = sim_result.wave_files[0].path if has_waveform else None
     if sweep_wave_path is None and sweep_result is not None:
         sweep_wave_path = sweep_result.wave_path
     if sweep_result is not None:
+        stale = bool(sweep_wave_path and not _same_realpath(sweep_result.wave_path, sweep_wave_path))
         sweep_call = (
-            _build_sweep_required_next_call(sweep_wave_path, sweep_result)
-            if _sweep_coverage_incomplete(sweep_result)
+            _build_sweep_suggested_call(sweep_wave_path, sweep_result)
+            if not stale and _sweep_coverage_incomplete(sweep_result)
             else None
         )
         sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
             available=True,
+            stale=stale,
             summary=_extract_protocol_health_summary(sweep_result),
             suggested_call=sweep_call,
         )
-        if (
-            anchor is not None
-            and has_waveform
-            and sweep_failure_context
-            and _sweep_coverage_incomplete(sweep_result)
-        ):
-            if sweep_call is not None:
-                missing_steps.append(
-                    {
-                        "tool": "sweep_handshakes",
-                        "arguments": sweep_call["arguments"],
-                        "reason": (
-                            "A compatible sweep_handshakes result exists, but its "
-                            f"coverage_status={sweep_result.coverage_status!r}; this is "
-                            "not a complete default-flow protocol scan."
-                        ),
-                    }
-                )
-    elif anchor is not None and has_waveform and sweep_failure_context:
-        sweep_call = _build_suggested_call("sweep_handshakes")
+    elif has_waveform:
+        from src.analyzer import _build_runtime_protocol_coverage
+        sweep_call = (
+            _build_sweep_suggested_call(sweep_wave_path)
+            if sweep_failure_context and _recommend_has_protocol_symptom(compatible_log_result)
+            else None
+        )
         sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
             available=False,
+            summary={**_build_runtime_protocol_coverage(None, wave_path=sweep_wave_path), "optional": True},
             suggested_call=sweep_call,
-        )
-        missing_steps.append(
-            {
-                "tool": "sweep_handshakes",
-                "arguments": sweep_call["arguments"],
-                "reason": (
-                    "Whole-design bus protocol health has not been checked; a "
-                    "scoreboard/data-compare failure is frequently the symptom of a "
-                    "lower-level protocol problem. sweep_handshakes inspects every "
-                    "AHB and valid/ready interface in one call and returns a "
-                    "per-interface stall/deadlock/payload-hold fact table."
-                ),
-            }
         )
     else:
         sections["protocol_health"] = None
@@ -11681,7 +11622,6 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             "build_tb_hierarchy": 1,
             "scan_structural_risks": 2,
             "parse_sim_log": 3,
-            "sweep_handshakes": 4,
             "recommend_failure_debug_next_steps": 5,
         }
         missing_steps.sort(
@@ -12176,16 +12116,18 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
 
     # Spell out the concrete sweep call at the one layer where its args first
     # co-exist: the symptom (just computed) + the wave path (cached get_sim_paths).
-    # A prose protocol_symptom_hint alone gets skipped by weak models; the
-    # ready-to-run call does not. Gated on BOTH a symptom AND an available wave
-    # (_build_sweep_required_next_call returns None without a wave_path) —
-    # suggestion only, the LLM still decides whether to run it.
+    # Gated on both a symptom and an available wave. This is an optional
+    # investigation; known interfaces may use targeted tools directly.
     summary["protocol_symptom_next_step"] = None
     if summary.get("protocol_symptom_hint"):
         sim_paths = _result_cache.get("get_sim_paths")
+        matching_log = bool(sim_paths and any(
+            _same_realpath(entry.path, args["log_path"])
+            for entry in getattr(sim_paths, "sim_logs", [])
+        ))
         wave_path = (
             sim_paths.wave_files[0].path
-            if sim_paths and getattr(sim_paths, "wave_files", None)
+            if matching_log and getattr(sim_paths, "wave_files", None)
             else None
         )
         sweep_cache = _result_cache.get("sweep_handshakes")
@@ -12199,7 +12141,7 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             )
             else None
         )
-        summary["protocol_symptom_next_step"] = _build_sweep_required_next_call(
+        summary["protocol_symptom_next_step"] = _build_sweep_suggested_call(
             wave_path, compatible_sweep
         )
 

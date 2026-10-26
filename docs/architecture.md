@@ -168,11 +168,16 @@ Verification
   lexical coverage with no findings is not a semantic pass.
   `zero_coverage` and `degraded` preserve source/parser uncertainty, and
   `semantic.status=not_run` means semantic checks did not run.
-- Protocol coverage and retry actionability are separate. Server routing relays
+- Handshake sweeps are optional investigations. Missing or partial sweeps never
+  set `required_next_call`, `workflow_incomplete`, or a missing workflow step.
+  Recommendations use `suggested_next_actions`; diagnostic sections use
+  `suggested_call`. Both retain `not_run` or the actual scope/window coverage,
+  including when no finding exists. `not_run` is distinct from `zero_coverage`.
+  Protocol coverage and retry actionability are separate. Server routing relays
   only a sweep action that expands scope, narrows the time window, changes the
   edge, or raises a truncated interface cap. An unscoped zero-interface sweep
   and a degraded sweep with no such action retain their warning/coverage receipt
-  but do not generate an identical required call. Recommendation output carries
+  but do not generate an identical suggested call. Recommendation output carries
   `runtime_protocol_coverage` even when no interface finding exists.
 - Wave-touching tool bodies (`get_signal_*`, `get_signals_*`, `search_signals`,
   `get_waveform_summary`, `period`/`diff_first_divergence`,
@@ -3974,8 +3979,8 @@ controls stay explicit coverage exclusions. Missing HDL commands, filelists,
 or tops remain gaps. A C++ build log alone does not provide HDL context; there
 is no automatic unrelated-sidecar or vendor-tree recovery.
 
-Run `get_sim_paths`, then the usual `scan_structural_risks`, log parsing and
-failed-run waveform sweep. Pass `compile_log` (plus ordered supplementary logs,
+Run `get_sim_paths`, then choose log/source and waveform investigations from the
+failure phase and target; handshake sweeps are optional. Pass `compile_log` (plus ordered supplementary logs,
 simulator and optional top) to design consumers. Native-first is independent of
 legacy hierarchy caches. A pure KDB request uses explicit `kdb_path` + `top_hint`;
 compile ownership and source fallback still require a log. Explicit design

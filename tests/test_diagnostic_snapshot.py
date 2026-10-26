@@ -455,7 +455,7 @@ class TestDiagnosticSnapshot:
         assert result.protocol_health.available is True
         assert result.protocol_health.summary["coverage_status"] == "zero_coverage"
         assert result.protocol_health.suggested_call == retry
-        assert "sweep_handshakes" in [s["tool"] for s in result.missing_steps]
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
 
     def test_unscoped_zero_coverage_is_not_retried_or_called_a_pass(self):
         _prefill_all()
@@ -497,16 +497,38 @@ class TestDiagnosticSnapshot:
         assert result.protocol_health.suggested_call is None
         assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
 
-    def test_sweep_recommended_when_waveform_and_failures(self):
+    def test_sweep_option_when_waveform_and_protocol_symptom(self):
         _prefill_all()
         server._result_cache["sweep_handshakes"] = None  # not run yet
+        server._result_cache["parse_sim_log"].protocol_symptom_hint = "Possible protocol symptom."
 
         result = server._handle_diagnostic_snapshot({})
 
         assert result.protocol_health is not None
         assert result.protocol_health.available is False
         assert result.protocol_health.suggested_call["arguments"]["wave_path"].endswith(".vcd")
-        assert "sweep_handshakes" in [s["tool"] for s in result.missing_steps]
+        assert result.protocol_health.summary["coverage_status"] == "not_run"
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
+
+    def test_unchecked_waveform_without_protocol_symptom_has_no_sweep_nudge(self):
+        _prefill_all()
+        server._result_cache["sweep_handshakes"] = None
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health.summary["coverage_status"] == "not_run"
+        assert result.protocol_health.suggested_call is None
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
+
+    def test_sweep_for_another_waveform_is_stale_and_not_retried(self):
+        _prefill_all()
+        server._result_cache["sweep_handshakes"].wave_path = "/tmp/earlier-run.vcd"
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health.stale is True
+        assert result.protocol_health.summary["wave_path"] == "/tmp/earlier-run.vcd"
+        assert result.protocol_health.suggested_call is None
 
     def test_sweep_not_recommended_on_clean_run(self):
         _prefill_all()
@@ -515,7 +537,8 @@ class TestDiagnosticSnapshot:
 
         result = server._handle_diagnostic_snapshot({})
 
-        assert result.protocol_health is None
+        assert result.protocol_health.summary["coverage_status"] == "not_run"
+        assert result.protocol_health.suggested_call is None
         assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
 
     def test_sweep_not_recommended_without_waveform(self):
@@ -1053,7 +1076,6 @@ class TestDiagnosticSnapshot:
 
         assert [step["tool"] for step in result.missing_steps] == [
             "scan_structural_risks",
-            "sweep_handshakes",
             "recommend_failure_debug_next_steps",
         ]
 

@@ -129,7 +129,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 > 用 TraceWeave 调查 `/path/to/verif` 下 `my_case` 的仿真失败。检查日志、设计结构和接口握手，再追踪可疑信号。结论请附时间戳、信号路径和源码位置。
 
-默认流程先发现运行产物，并行准备设计上下文与扫描结构风险，再解析失败日志；失败运行有波形时继续扫描握手。助手复用设计上下文，按需浏览源码、追踪信号；需要完整层次时仍可显式构建。
+调查先定位当前运行产物，扫描结构风险并解析失败日志。助手根据失败阶段和已知目标选择工具顺序与范围：已知信号或接口可直接定点检查；目标不明确的超时、挂起或比较失败可选择局部或全局握手扫描。未执行 sweep 表示协议行为未检查，不阻塞推荐或其他调查；需要完整层次时仍可显式构建。
 
 结构扫描默认开启（`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`）。如需在默认流程中跳过，
 在 MCP 服务环境中设置 `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`，然后重启或重新连接服务。
@@ -250,8 +250,7 @@ explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
 契约不变。文件结果用 `ownership_basis="compile_metadata"` 与
 `source_status="not_captured"` 区分编译记录和已捕获源码。名称/路径过滤与三种
 编译记录导出无需 KDB 或语义 provider。缓存 KDB 发现仍精确 hash 源码，成本单列；
-不会自动构建 KDB。结构扫描及失败波形 sweep 的执行、coverage 解释规则不变，
-零覆盖不能作为干净结论。
+不会自动构建 KDB。结构扫描和可选握手调查分别保留 coverage；未执行或零覆盖均不能判为干净。
 
 ## 常见问题
 

@@ -181,6 +181,26 @@ class TestFailureEventAnalysis:
         assert result["primary_failure_target"]["group_signature"] == "ASSERTION_FAIL: apUNEXPECTED_ASSERTION"
         assert result["recommended_signals"][0]["path"] == "top_tb.dut.req"
 
+    def test_scoped_protocol_receipt_keeps_checked_window(self, log_path):
+        analyzer = WaveformAnalyzer(log_path, FakeWaveParser(), "vcs")
+        result = analyzer.recommend_debug_next_steps(
+            wave_path="/tmp/wave.vcd",
+            handshake_sweep={
+                "wave_path": "/tmp/wave.vcd", "scope": "top_tb.dut.if0",
+                "start_ps": 10, "end_ps": 20, "edge": "negedge",
+                "coverage_status": "complete", "interface_count": 1,
+                "flagged_count": 1, "interfaces": [{
+                    "scope": "top_tb.dut.if0", "flags": ["ended_in_stall"],
+                }],
+            },
+        )
+        receipt = result["runtime_protocol_coverage"]
+        assert (receipt["scope"], receipt["start_ps"], receipt["end_ps"], receipt["edge"]) == (
+            "top_tb.dut.if0", 10, 20, "negedge",
+        )
+        assert receipt["facts_origin"] == "waveform"
+        assert result["runtime_protocol_findings"][0]["flags"] == ["ended_in_stall"]
+
     def test_recommend_preserves_incomplete_protocol_coverage_receipt(self, log_path):
         analyzer = WaveformAnalyzer(log_path, FakeWaveParser(), "vcs")
         warning = "ZERO COVERAGE: no interfaces checked; this is not a protocol pass."
@@ -199,11 +219,15 @@ class TestFailureEventAnalysis:
 
         assert result["runtime_protocol_findings"] == []
         assert result["runtime_protocol_coverage"] == {
+            "wave_path": "/tmp/wave.vcd", "scope": None,
+            "start_ps": 0, "end_ps": -1, "edge": "posedge",
+            "facts_origin": "waveform", "analysis_performed": True,
             "coverage_status": "zero_coverage",
             "coverage_warnings": [warning],
             "discovered_count": 0,
             "interface_count": 0,
             "flagged_count": 0,
+            "transition_truncated_count": 0, "discovery": {}, "skipped_count": 0,
         }
         assert "not a protocol pass" in " ".join(result["why"])
 

@@ -2,17 +2,19 @@
 
 ## Overview
 
-The default simulation investigation is:
+One simulation investigation route is:
 `get_diagnostic_snapshot → get_sim_paths → scan_structural_risks
-→ parse_sim_log → sweep_handshakes → recommend_failure_debug_next_steps`.
-Reuse current cached steps when the snapshot confirms them. The sweep applies to
-failed runs with a waveform; standalone waveform queries need neither discovery
-nor a hierarchy build. Inspect the tool's current MCP schema for exact arguments.
+→ parse_sim_log → targeted investigation or optional sweep_handshakes`.
+Choose tool order and scope from the current run, failure phase and known target.
+Recommendations can precede a sweep. Reuse current cached steps when the snapshot
+confirms them; standalone waveform queries need neither discovery nor a hierarchy
+build. Inspect the tool's current MCP schema for exact arguments. Build/elaboration
+diagnostics and earlier-run waveforms retain separate evidence identities.
 
 To omit structural scanning from this default flow, set
 `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0` in the MCP server environment and
 restart or reconnect. Explicit scan requests remain available; skipped checks
-remain unchecked, and the handshake-sweep requirement still applies.
+remain unchecked. Handshake investigation remains optional.
 
 ### Reading driver evidence
 
@@ -217,10 +219,10 @@ Step 3: parse_sim_log(log_path, simulator)
 │    previous parsed snapshot becomes the baseline
 │
 ▼
-Step 4: sweep_handshakes(wave_path, ...)
-│  Runtime-layer protocol coverage scan.
-│  Run after parse_sim_log on a failing run with a waveform, before treating a
-│  scoreboard/data mismatch as an RTL value bug.
+Step 4 (optional): sweep_handshakes(wave_path, scope?, start_time_ps?, end_time_ps?)
+│  Batch protocol investigation for opaque timeout/hang or compare symptoms.
+│  With a known module, narrow scope/window; with a known interface or signals,
+│  use targeted inspection directly. An unperformed sweep remains unchecked.
 │  Returns: discovered_count, interface_count, flagged_count,
 │           coverage_status, coverage_warnings, suggested_next_actions,
 │           interfaces[], skipped[]
@@ -266,16 +268,12 @@ Step 5: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
 │           correlated_structural_risks, runtime_protocol_findings,
 │           runtime_protocol_coverage
 │  - runtime_protocol_findings: flagged interfaces carried over from a compatible
-│    sweep_handshakes cache (the runtime-layer counterpart of
-│    correlated_structural_risks). Facts to correlate, not a verdict. If sweep
-│    has not run, or has an actionable parameter-changing retry, on a failing
-│    run with a waveform, required_next_call steers back to sweep_handshakes
-│    (degraded_reason="missing_handshake_sweep" or
-│    "incomplete_handshake_sweep"); a scoreboard/compare/mismatch symptom
-│    prioritizes sweep over the structural scan.
-│  - runtime_protocol_coverage preserves zero/degraded warnings even when there
-│    are no flagged rows. If no retry can change the result, required_next_call
-│    is null and missing_inputs names the external dump/clock/window prerequisite.
+│    sweep_handshakes cache. Facts to correlate, not a verdict.
+│  - runtime_protocol_coverage reports not_run or the actual wave/scope/window,
+│    discovery gaps and zero/degraded/truncated coverage, including empty findings.
+│  - suggested_next_actions may offer an optional sweep or a changing retry.
+│    Sweep coverage never creates a required_next_call or workflow_incomplete.
+│    get_diagnostic_snapshot retains it in protocol_health, outside missing_steps.
 │
 │  What the agent does:
 │  - Use the top recommended signals first instead of blind substring search
@@ -483,11 +481,9 @@ exclude an internal RTL fault.
 On a scoreboard/compare-style failure, `parse_sim_log` sets a generic
 `protocol_symptom_hint` (mirrored into `get_diagnostic_snapshot`'s top-level
 output) reminding you that such a mismatch is frequently the *symptom* of a
-lower-level bus-protocol problem — run `sweep_handshakes` once to check the
-supported AHB / valid-ready interfaces within the reported coverage in one call
-before reading RTL line-by-line or scrubbing the waveform by hand; drill into a
-single interface with `suggest_protocol_bundles`/`suggest_handshakes` +
-`inspect_handshake` only if needed. The hint is a boundary-safe pointer only: it
+lower-level bus-protocol problem. Consider `sweep_handshakes` when the interface
+is unknown, choosing scope/window from evidence; use `inspect_handshake` directly
+for a known interface. The hint is a boundary-safe pointer only: it
 never asserts a protocol type or names a specific signal, and the
 two-hypothesis discipline above still applies.
 
@@ -499,17 +495,16 @@ get_diagnostic_snapshot (reuse current cached steps)
 
 get_sim_paths
   ├─ provides compile_log / simulator / log_path / wave_path to downstream tools
-  └─ scan_structural_risks
-       └─ parse_sim_log
-                                     └─ sweep_handshakes
-                                          └─ recommend_failure_debug_next_steps
-                                               └─ search_signals
-                                                    └─ analyze_failures
-                                                         └─ deep dive:
-                                                              analyze_failure_event
-                                                              explain_signal_driver / find_signal_loads
-                                                              get_error_context / get_signal_*
-                                                              trace_x_source / trace_signal_path
+  ├─ scan_structural_risks (default structural policy)
+  ├─ parse_sim_log
+  ├─ sweep_handshakes (optional)
+  ├─ recommend_failure_debug_next_steps
+  └─ targeted investigation:
+       search_signals / analyze_failures / deep dive:
+         analyze_failure_event
+         explain_signal_driver / find_signal_loads
+         get_error_context / get_signal_*
+         trace_x_source / trace_signal_path
 ```
 
 ## Parameter Flow
@@ -533,7 +528,10 @@ get_sim_paths
 
 ## Optional Analysis Primitives
 
-Most of these are not part of the default flow above; reach for them when the symptom is timing- or divergence-shaped rather than a logged value mismatch. The exception is `sweep_handshakes`, which is now a **default-flow protocol-health step** — run it after `parse_sim_log` on a failing run that has a waveform, like `scan_structural_risks` at the runtime layer (see Repository Guidance / `AGENTS.md`).
+Choose these tools according to the symptom and known target. `sweep_handshakes`
+is an optional batch investigation; known interfaces or signals can use targeted
+tools directly. Missing or partial sweep evidence remains explicit and never
+requires automatic retries.
 
 - `period(wave_path, signal, edge?)` — when a signal should be periodic (clock, strobe, fixed-rate valid) and the symptom is a cadence/throughput irregularity with no value in the log. Returns the dominant period and the first off-beat (auto-cursor).
 - `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b)` — when two waveform signals should match: cross-run (passing vs failing) or within-run (lockstep / shadow). Returns the first confirmed known-value difference in the covered window (auto-cursor); X/Z and incomplete observations remain explicit. Needs both sides dumped as waveform signals; does not compare against a software reference model.
@@ -541,7 +539,7 @@ Most of these are not part of the default flow above; reach for them when the sy
 - `inspect_handshake(wave_path, clock, valid, ready, payload?)` — cycle-by-cycle classification of a clocked valid/ready handshake: stalls, long-stall windows, backpressure imbalance, payload-hold violations during a stall, and **premature valid deassertion** (`check_valid_hold`, default on): a stalled beat whose valid/htrans drops the next edge before ready/HREADY arrives — the master dropping the transfer instead of waiting (the AHB master-not-waiting-for-HREADY bug). The deassertion check needs no `payload` and catches what payload-hold cannot: a 1-cycle stall (`max_stall_cycles==1`) leaves no room for payload to change, and htrans (the derived valid) is not a payload signal. For protocol-timing bugs that leave no value pattern in scoreboard logs. AHB has no literal valid — pass `valid_htrans` instead. Its `coverage` object reports only dimensions it actually checked (`stall_checked`, `backpressure_checked`, `payload_hold_checked`/partial, `valid_hold_checked`); side labels must come from discovery/caller context, not this inspection tool. On a finding it sets `violating_signal` (the valid/htrans for a premature deassertion) + a `next_actions` link to `explain_signal_driver`. For the **one-sided** violations (payload-hold, premature deassertion) it also returns a structured `attribution` block (`violating_side=valid_driver`, `exonerated_side=ready_driver`): both are breaches of the valid-driver's obligation, so follow the channel producer's driver rather than the consumer/ready driver. This is protocol role, not trace-ownership: the valid-driver is the channel producer (master on AXI AW/AR/W, slave on R/B; AHB htrans is always master), and `explain_signal_driver` on `valid` lands on the actual instance — but when the producer is a UVM/TB driver (procedural drive via virtual interface + clocking block), NPI cannot see it and returns `driver_status="testbench_driven"` rather than naming a DUT register that merely reads the bus (do not read that as a mis-wire). A plain stall is genuinely two-sided, so `attribution` stays empty and the link targets `ready` — the trace holds values, not ownership; attribution = bus-fact + drive-direction, composed by you. With no finding in a complete targeted check, investigate internal producer/consumer behavior and the expected model; interface checks alone do not select a root cause.
 - `suggest_handshakes(wave_path, scope?)` — scan the waveform and propose ready-to-use `inspect_handshake` bundles (pairs `*valid`/`*ready`, finds the clock, groups payload). Run before `inspect_handshake` so you don't hand-assemble signal paths.
 - `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?)` — scan AHB/APB-style protocol bundles where there is no literal valid. AHB candidates return `valid_htrans`-based `inspect_handshake` args; APB candidates return `psel`/`penable`/`pready` facts and mark the missing derived-valid step. For AHB candidates the result also carries a `next_step` field — a copy-paste-ready `inspect_handshake(...)` call per interface — because discovery only LOCATES the bundle; running that call is the analysis step. Do not stop at discovery. Treat `direction_tag=unknown` as a real coverage limitation, not as permission to infer a side.
-- `sweep_handshakes(wave_path, scope?)` — **default-flow protocol-health step** (runtime-layer counterpart of `scan_structural_risks`; `get_diagnostic_snapshot` lists it in `missing_steps` on a failing run with a waveform, and keeps listing it only while a parameter-changing retry is available). Whole-design handshake anomaly sweep: discover every valid/ready interface **and every AHB interface** (htrans-derived valid) and inspect each in one call, returning a comparative fact table (each row tagged `kind`=`valid_ready`/`ahb`). The one-call protocol-health check the scoreboard-failure hint steers toward; for opaque global symptoms (timeout/hang) or any scoreboard mismatch when you don't yet know which interface misbehaves. APB excluded (needs a derived valid). Always read `coverage_status`: `zero_coverage` checked no interfaces and is not a pass; `truncated`/`degraded` means partial coverage, so `flagged_count=0` is not a clean-protocol conclusion. No-progress terminal coverage remains visible in warnings but is not blindly replayed.
+- `sweep_handshakes(wave_path, scope?, start_time_ps?, end_time_ps?)` — optional batch investigation for timeout/hang or compare symptoms when the responsible interface is unknown. Discover valid/ready and AHB interfaces within the selected scope, then inspect the selected time window in one call. The comparative table tags each row `kind=valid_ready/ahb`; APB requires a derived valid and is excluded. `get_diagnostic_snapshot.protocol_health` retains coverage and optional suggestions, outside `missing_steps`. Read `coverage_status`: `zero_coverage` checked no interfaces; `truncated`/`degraded` means partial coverage. Zero findings never establish a clean result outside the checked scope/window. No-progress terminal coverage remains visible without blind retries.
 - `verify_window(wave_path, clock, mode, predicate | antecedent+consequent | delta)` — evaluate a temporal predicate (always/never/eventually/implication/sequence) over a clock window and return a `holds` verdict plus a concrete witness/counterexample. To prove or disprove an RTL inference in one call. For `implication`, `overlap=false` (`|=>`) starts the response window the NEXT cycle — the shape for a **hold/stability** property ("B must STILL hold next cycle", e.g. `(htrans==2 && hready==0) |=> htrans==2` proves premature-deassertion). With the default `overlap=true` such a property is a **vacuous pass** (B already true on A's own cycle); the result is flagged `vacuous=true` + a `VACUOUS PASS` warning so the `holds=true` is not misread as exclusion evidence — re-run with `overlap=false`. `sequence` checks the per-accepted-beat increment of one signal (address-stride): `predicate` is the accepted-beat gate, `delta`=`{signal,value,op?,modulo?,restart_when?}` — `modulo` absorbs a legal WRAP wrap-around, `restart_when` (e.g. htrans==NONSEQ) re-seeds at burst starts, both supplied by you so the tool stays burst-decode-free. On a violation it sets `violating_signal` + a `next_actions` link to `explain_signal_driver` (master-driven signal → points at the master by elimination). Multi-slave/master: scope a property to one subset with a predicate term (per-slave `HSEL`, per-master `HMASTER`) — `inspect_handshake`'s htrans-only valid cannot qualify by select, so use the verify_window gate for per-slave/per-master checks.
 - `reconstruct_transactions(wave_path, clock, req_valid, req_ready, cmp_valid, cmp_ready, ...)` — id-correlated request/response transaction layer: per-transaction latency plus outstanding/ordering/unmatched facts. AXI read AR→R, write AW→B (+ optional W-data channel); `req_id`/`cmp_id` optional (omit both for in-order AXI-Lite/APB streams).
 
@@ -559,7 +557,7 @@ Read `failure_reproduced`, `not_reproduced`, `insufficient_evidence` or `unsuppo
 alongside coverage, candidate selection and per-attempt evidence. A reproduced
 failure is a waveform fact, not a DUT/TB root-cause assignment. A cutoff, pending
 obligation, missing history or unobserved signal is not a pass. This targeted check
-does not replace the default structural scan or handshake sweep.
+retains its own coverage independently of structural scans and optional sweeps.
 
 ## Iterative Debug Pattern
 

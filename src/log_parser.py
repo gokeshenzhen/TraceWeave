@@ -1137,13 +1137,11 @@ _PROTOCOL_SYMPTOM_SOURCES = frozenset({"scoreboard"})
 _PROTOCOL_SYMPTOM_MECHANISMS = frozenset({"mismatch", "protocol", "deadlock", "timeout"})
 
 _PROTOCOL_SYMPTOM_HINT = (
-    "scoreboard/compare-style failures are frequently a SYMPTOM of a lower-level "
-    "bus-protocol problem, not the root cause. Before reading RTL line-by-line or "
-    "inspecting the waveform by hand, run sweep_handshakes once: it checks the "
-    "protocol health of every bus interface (AHB + AXI/valid-ready) in a single "
-    "call and returns a per-interface stall/deadlock/payload-hold fact table. "
-    "Drill into one interface with suggest_protocol_bundles/suggest_handshakes + "
-    "inspect_handshake only if you need to."
+    "scoreboard/compare-style failures can be symptoms of a bus-protocol problem. "
+    "For an unknown interface, consider sweep_handshakes over an evidence-backed "
+    "scope/window; for a known interface, use inspect_handshake directly. "
+    "Read actual coverage and keep producer, consumer and expected-model "
+    "hypotheses open until waveform evidence distinguishes them."
 )
 
 

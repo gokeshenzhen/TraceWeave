@@ -663,7 +663,7 @@ class TestSweepRetryRouting:
             ]
         )
 
-        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) is None
+        assert server._build_sweep_suggested_call("/tmp/wave.vcd", result) is None
 
     def test_scoped_zero_coverage_retries_without_scope(self):
         retry = {
@@ -673,7 +673,7 @@ class TestSweepRetryRouting:
         }
         result = self._result(scope="top_tb.u_dut", suggested_next_actions=[retry])
 
-        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+        assert server._build_sweep_suggested_call("/tmp/wave.vcd", result) == retry
 
     def test_truncated_coverage_synthesizes_a_larger_cap(self):
         result = self._result(
@@ -683,7 +683,7 @@ class TestSweepRetryRouting:
             truncated=True,
         )
 
-        retry = server._build_sweep_required_next_call("/tmp/wave.vcd", result)
+        retry = server._build_sweep_suggested_call("/tmp/wave.vcd", result)
 
         assert retry is not None
         assert retry["arguments"]["max_interfaces"] == 7
@@ -695,7 +695,7 @@ class TestSweepRetryRouting:
             coverage_warnings=["COVERAGE DEGRADED: clock was not dumped"],
         )
 
-        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) is None
+        assert server._build_sweep_suggested_call("/tmp/wave.vcd", result) is None
 
     def test_degraded_coverage_accepts_a_narrower_window_action(self):
         retry = {
@@ -715,7 +715,7 @@ class TestSweepRetryRouting:
             suggested_next_actions=[retry],
         )
 
-        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+        assert server._build_sweep_suggested_call("/tmp/wave.vcd", result) == retry
 
     def test_degraded_open_ended_window_accepts_a_later_start(self):
         retry = {
@@ -734,7 +734,7 @@ class TestSweepRetryRouting:
             suggested_next_actions=[retry],
         )
 
-        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+        assert server._build_sweep_suggested_call("/tmp/wave.vcd", result) == retry
 
 
 @pytest.mark.anyio
@@ -997,6 +997,22 @@ _SCOREBOARD_MISMATCH_LINE = (
 
 @pytest.mark.anyio
 class TestParseSimLogSweepNextStep:
+    async def test_new_log_does_not_suggest_waveform_from_prior_discovery(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        log = tmp_path / "new-run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(tmp_path / "old-run.vcd"))],
+            sim_logs=[types.SimpleNamespace(path=str(tmp_path / "old-run.log"))],
+        )
+
+        result = await server._dispatch(
+            "parse_sim_log", {"log_path": str(log), "simulator": "vcs"},
+        )
+
+        assert result.protocol_symptom_hint is not None
+        assert result.protocol_symptom_next_step is None
+
     async def test_protocol_symptom_emits_ready_to_run_sweep_call(self, tmp_path):
         _prefill_get_sim_paths_state()
         wave = tmp_path / "wave.fsdb"
@@ -1004,7 +1020,8 @@ class TestParseSimLogSweepNextStep:
         log = tmp_path / "run.log"
         log.write_text(_SCOREBOARD_MISMATCH_LINE)
         server._result_cache["get_sim_paths"] = types.SimpleNamespace(
-            wave_files=[types.SimpleNamespace(path=str(wave))]
+            wave_files=[types.SimpleNamespace(path=str(wave))],
+            sim_logs=[types.SimpleNamespace(path=str(log))]
         )
         try:
             res = await server._dispatch(
@@ -1039,7 +1056,8 @@ class TestParseSimLogSweepNextStep:
         log = tmp_path / "run.log"
         log.write_text(_SCOREBOARD_MISMATCH_LINE)
         server._result_cache["get_sim_paths"] = types.SimpleNamespace(
-            wave_files=[types.SimpleNamespace(path=str(wave))]
+            wave_files=[types.SimpleNamespace(path=str(wave))],
+            sim_logs=[types.SimpleNamespace(path=str(log))]
         )
         _prefill_sweep_handshakes_cache(
             str(wave),
@@ -1064,7 +1082,8 @@ class TestParseSimLogSweepNextStep:
         log = tmp_path / "run.log"
         log.write_text(_SCOREBOARD_MISMATCH_LINE)
         server._result_cache["get_sim_paths"] = types.SimpleNamespace(
-            wave_files=[types.SimpleNamespace(path=str(wave))]
+            wave_files=[types.SimpleNamespace(path=str(wave))],
+            sim_logs=[types.SimpleNamespace(path=str(log))]
         )
         retry = {
             "tool": "sweep_handshakes",
@@ -1096,7 +1115,8 @@ class TestParseSimLogSweepNextStep:
         log = tmp_path / "run.log"
         log.write_text("module_a ERROR something went wrong @ 1 ns\n")
         server._result_cache["get_sim_paths"] = types.SimpleNamespace(
-            wave_files=[types.SimpleNamespace(path=str(wave))]
+            wave_files=[types.SimpleNamespace(path=str(wave))],
+            sim_logs=[types.SimpleNamespace(path=str(log))]
         )
         try:
             res = await server._dispatch(
@@ -2069,7 +2089,7 @@ $enddefinitions $end
         # sweep cache present ⇒ workflow not flagged incomplete for a missing sweep
         assert result["degraded_reason"] is None
 
-    async def test_recommend_requires_sweep_on_protocol_symptom_when_missing(self, tmp_path):
+    async def test_recommend_suggests_optional_sweep_on_protocol_symptom(self, tmp_path):
         _prefill_get_sim_paths_state()
         _prefill_build_tb_hierarchy_state()
         log_path = tmp_path / "run.log"
@@ -2113,8 +2133,7 @@ $enddefinitions $end
             "log_path": str(log_path),
             "simulator": "vcs",
         }
-        # scan cache present, sweep cache absent ⇒ on a protocol/mismatch symptom
-        # the sweep takes priority over the (already-satisfied) structural scan.
+        # Missing sweep evidence remains unchecked and advisory.
         server._result_cache["scan_structural_risks"] = server.schemas.ScanStructuralRisksResult.model_validate(
             {"scan_scope": "scope1", "files_scanned": 1, "total_risks": 0, "risks": [],
              "categories_scanned": ["magic_condition"], "skipped_files": []}
@@ -2134,10 +2153,12 @@ $enddefinitions $end
             },
         )
 
-        assert result["workflow_incomplete"] is True
-        assert result["degraded_reason"] == "missing_handshake_sweep"
-        assert result["required_next_call"]["tool"] == "sweep_handshakes"
-        assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
+        assert result["workflow_incomplete"] is False
+        assert result["degraded_reason"] is None
+        assert result["required_next_call"] is None
+        assert result["runtime_protocol_coverage"]["coverage_status"] == "not_run"
+        assert result["suggested_next_actions"][0]["tool"] == "sweep_handshakes"
+        assert result["suggested_next_actions"][0]["arguments"]["wave_path"] == str(wave_path)
 
     @pytest.mark.parametrize(
         ("coverage_status", "warning", "expected_missing_input"),
@@ -2216,10 +2237,11 @@ $enddefinitions $end
             },
         )
 
-        assert result["workflow_incomplete"] is True
-        assert result["degraded_reason"] == "incomplete_handshake_sweep"
+        assert result["workflow_incomplete"] is False
+        assert result["degraded_reason"] is None
         assert result["required_next_call"] is None
-        assert expected_missing_input in " ".join(result["missing_inputs"])
+        assert result["suggested_next_actions"] == []
+        assert expected_missing_input in " ".join(result["why"])
         assert result["runtime_protocol_coverage"]["coverage_status"] == coverage_status
         assert result["runtime_protocol_coverage"]["coverage_warnings"] == [warning]
 

@@ -70,7 +70,7 @@ def test_opt_out_removes_scan_relays_but_keeps_context_recovery(monkeypatch, pre
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("sweep_complete", [False, True])
-async def test_opt_out_does_not_block_recommendations_or_skip_handshakes(
+async def test_opt_out_keeps_handshakes_optional_with_explicit_coverage(
     tmp_path, monkeypatch, sweep_complete
 ):
     monkeypatch.setattr(server, "STRUCTURAL_SCAN_IN_WORKFLOW", False)
@@ -103,12 +103,12 @@ async def test_opt_out_does_not_block_recommendations_or_skip_handshakes(
     result = await server._dispatch_inner("recommend_failure_debug_next_steps", dict(
         log_path=str(log), wave_path=wave, simulator="vcs",
     ))
-    assert result["workflow_incomplete"] is not sweep_complete
-    assert result["degraded_reason"] == (None if sweep_complete else "missing_handshake_sweep")
-    if sweep_complete:
-        assert result["required_next_call"] is None
-    else:
-        assert result["required_next_call"]["tool"] == "sweep_handshakes"
+    assert result["workflow_incomplete"] is False
+    assert result["degraded_reason"] is None
+    assert result["required_next_call"] is None
+    assert result["runtime_protocol_coverage"]["coverage_status"] == (
+        "complete" if sweep_complete else "not_run"
+    )
     assert any(FLAG + "=0" in why and "unchecked" in why for why in result["why"])
 
 
@@ -171,7 +171,9 @@ async def test_fresh_stdio_workflow_policy_and_explicit_scan(tmp_path, workflow_
                 snapshot = await call("get_diagnostic_snapshot")
                 missing = {step["tool"] for step in snapshot.get("missing_steps") or []}
                 assert ("scan_structural_risks" in missing) is workflow_enabled
-                assert "sweep_handshakes" in missing
+                assert "sweep_handshakes" not in missing
+                assert snapshot["protocol_health"]["summary"]["coverage_status"] == "not_run"
+                assert "optional batch investigation" in initialized.instructions
                 if not workflow_enabled:
                     assert snapshot["structural_scan"]["available"] is False
                     assert snapshot["structural_scan"]["summary"]["status"] == "skipped_by_policy"

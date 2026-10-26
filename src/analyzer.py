@@ -186,7 +186,7 @@ class WaveformAnalyzer:
         events = (failure_events if failure_events is not None else
                   SimLogParser(self.log_path, self.simulator, self.native_time_unit).parse_failure_events())
         if not events:
-            runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep)
+            runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep, wave_path=wave_path)
             why = ["No normalized failure events were found in the simulation log."]
             if (
                 runtime_protocol_coverage is not None
@@ -220,7 +220,7 @@ class WaveformAnalyzer:
             primary_for_risk["failing_signal_path"] = event_analysis["recommended_signals"][0].get("path")
         correlated_risks = _rank_structural_risks(structural_risks or [], primary_for_risk, normalized_hints)
         runtime_protocol_findings = _build_runtime_protocol_findings(handshake_sweep)
-        runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep)
+        runtime_protocol_coverage = _build_runtime_protocol_coverage(handshake_sweep, wave_path=wave_path)
         why = [
             "Selected the earliest failure with the strongest available timing/source anchor.",
             f"Failure classified heuristically as {failure_class}.",
@@ -680,15 +680,31 @@ def _build_runtime_protocol_findings(handshake_sweep: dict[str, Any] | None) -> 
 
 def _build_runtime_protocol_coverage(
     handshake_sweep: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+    *, wave_path: str | None = None,
+) -> dict[str, Any]:
     if not handshake_sweep:
-        return None
+        return {
+            "coverage_status": "not_run",
+            "coverage_warnings": ["Handshake sweep has not run for this waveform; protocol behavior remains unchecked."],
+            "wave_path": wave_path,
+            "analysis_performed": False,
+        }
     return {
+        "wave_path": handshake_sweep.get("wave_path", wave_path),
+        "scope": handshake_sweep.get("scope"),
+        "start_ps": handshake_sweep.get("start_ps", 0),
+        "end_ps": handshake_sweep.get("end_ps", -1),
+        "edge": handshake_sweep.get("edge", "posedge"),
+        "facts_origin": "waveform",
+        "analysis_performed": True,
         "coverage_status": handshake_sweep.get("coverage_status", "degraded"),
         "coverage_warnings": list(handshake_sweep.get("coverage_warnings") or []),
         "discovered_count": int(handshake_sweep.get("discovered_count") or 0),
         "interface_count": int(handshake_sweep.get("interface_count") or 0),
         "flagged_count": int(handshake_sweep.get("flagged_count") or 0),
+        "transition_truncated_count": int(handshake_sweep.get("transition_truncated_count") or 0),
+        "discovery": handshake_sweep.get("discovery") or {},
+        "skipped_count": len(handshake_sweep.get("skipped") or []),
     }
 
 

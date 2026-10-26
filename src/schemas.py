@@ -1220,6 +1220,7 @@ class RecommendNextStepsResult(SchemaModel):
     # Coverage receipt is kept even when there are no flagged rows. In
     # particular, zero_coverage + [] findings is not a protocol pass.
     runtime_protocol_coverage: dict[str, Any] | None = None
+    suggested_next_actions: list[dict[str, Any]] = Field(default_factory=list)
     workflow_incomplete: bool = False
     degraded_reason: (
         Literal[
@@ -1252,10 +1253,8 @@ class DiagnosticSnapshot(SchemaModel):
     design_context: DiagnosticSnapshotSection | None = None
     log_analysis: DiagnosticSnapshotSection
     structural_scan: DiagnosticSnapshotSection | None = None
-    # Whole-design protocol health (sweep_handshakes). Same role as
-    # structural_scan but at the waveform/runtime layer: a default-flow
-    # perception step whose facts the LLM judges. Present only when a waveform
-    # exists; recommended (via missing_steps) only on a failing run.
+    # Optional sweep evidence, including not_run and partial coverage. Its
+    # suggested_call is advisory and never makes sweep a missing workflow step.
     protocol_health: DiagnosticSnapshotSection | None = None
     recommended_next: DiagnosticSnapshotSection
     simulator: str | None = None

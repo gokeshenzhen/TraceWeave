@@ -131,7 +131,7 @@ Connect your assistant and ask, replacing the path with your project directory:
 
 > Use TraceWeave to investigate the simulation failure in `my_case` under `/path/to/verif`. Check logs, design structure, and interface handshakes, then trace suspicious signals. Include timestamps, signal paths, and source references.
 
-The default investigation discovers run artifacts, prepares a design context and scans structural risks in parallel, then parses failures and sweeps handshakes when a failed run has a waveform. The assistant uses that context to browse source and trace signals on demand. A full hierarchy build remains available when explicitly needed.
+The investigation discovers current run artifacts, scans structural risks and parses failures. The assistant chooses tool order and scope from the failure phase and known target: inspect known signals/interfaces directly, or consider a scoped/global handshake sweep for opaque timeout or compare symptoms. An unperformed sweep leaves protocol behavior unchecked and does not block recommendations. A full hierarchy build remains available when explicitly needed.
 
 Structural scanning is enabled by default (`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`).
 To skip it in the default workflow, set `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`
@@ -264,8 +264,8 @@ results distinguish `ownership_basis="compile_metadata"`/`source_status="not_cap
 from captured source ownership. Metadata name/path filters and the three compile
 record exports need neither KDB nor a semantic provider. Cached KDB discovery
 still performs its exact source hash and reports that cost separately. No KDB
-is automatically built. Scan and failed-run waveform sweep coverage remain
-independent requirements; zero coverage is never a clean result.
+is automatically built. Structural and optional handshake coverage remain
+independent; unperformed checks and zero coverage never establish a clean result.
 
 ## FAQ
 

@@ -338,14 +338,18 @@ def test_unselected_xcelium_diagnostic_never_probes_kdb(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("errors,has_wave", [(1, True), (0, True), (1, False)])
-def test_scan_and_failure_wave_sweep_remain_independent_of_tree(case, errors, has_wave):
+def test_scan_and_optional_wave_evidence_remain_independent_of_tree(case, errors, has_wave):
     case.discover_state()
     case.parse_state(errors)
     if not has_wave:
         server._result_cache["get_sim_paths"] = server._result_cache["get_sim_paths"].model_copy(update={"wave_files": []})
     result = server._handle_diagnostic_snapshot({})
     assert "scan_structural_risks" in tools_in(result) and not result.hierarchy.available
-    assert ("sweep_handshakes" in tools_in(result)) is bool(errors and has_wave)
+    assert "sweep_handshakes" not in tools_in(result)
+    if has_wave:
+        assert result.protocol_health.summary["coverage_status"] == "not_run"
+    else:
+        assert result.protocol_health is None
     if not errors: assert "recommend_failure_debug_next_steps" not in tools_in(result)
 
 
