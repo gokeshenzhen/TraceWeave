@@ -6379,12 +6379,10 @@ async def list_tools():
         Tool(
             name="get_sim_paths",
             description=(
-                "Discover compile logs, simulation logs, and waveform files under a verif directory. "
-                "If case_name is omitted, the tool returns available cases. "
-                "For non-standard layouts you may pass explicit sim_log / wave_file / compile_log "
-                "paths; any provided field is used as-is and the omitted ones are still auto-discovered "
-                "(a sim_log path also anchors discovery of the matching waveform and compile/elab logs). "
-                "suggested_calls includes parse_sim_log arguments using log_path when a log and simulator are known."
+                "Discover compile/sim logs and waveforms under verif_root. Omit case_name to list cases. "
+                "Explicit sim_log/wave_file/compile_log override those paths; others are auto-discovered. "
+                "sim_log anchors related wave/build logs. suggested_calls supplies "
+                "parse_sim_log(log_path, simulator) when known."
             ),
             inputSchema={
                 "type": "object",
@@ -6399,8 +6397,7 @@ async def list_tools():
                     },
                     "sim_log": {
                         "type": "string",
-                        "description": "Optional explicit simulation log path (absolute, or relative to verif_root). "
-                        "Used verbatim, and its directory anchors discovery of the waveform and compile/elab logs for the same case.",
+                        "description": "Explicit sim log, absolute or relative to verif_root; anchors related wave/build logs.",
                     },
                     "wave_file": {
                         "type": "string",
@@ -6408,8 +6405,7 @@ async def list_tools():
                     },
                     "compile_log": {
                         "type": "string",
-                        "description": "Optional explicit compile/elaborate log path, absolute or relative to verif_root. "
-                        "Used verbatim when given; otherwise discovered from the case dir, the parent top, or a sibling build/elab dir.",
+                        "description": "Explicit compile/elaborate log, absolute or relative to verif_root; otherwise search case, parent top and sibling build/elab dirs.",
                     },
                 },
                 "required": ["verif_root"],
@@ -6470,7 +6466,7 @@ async def list_tools():
                     },
                     "log_path": {
                         "type": "string",
-                        "description": "Absolute simulation log path from get_sim_paths.sim_logs[].path. This tool uses log_path; discovery uses sim_log.",
+                        "description": "Absolute sim log from get_sim_paths.sim_logs[].path; use log_path here, sim_log in discovery.",
                     },
                     "simulator": {"type": "string", "description": "vcs / xcelium / verilator"},
                     "max_groups": {
@@ -7715,9 +7711,7 @@ async def list_tools():
                 "deadlock signature ended_in_stall, x-while-valid, payload-hold, "
                 "write-data-hold, premature valid deassertion, backpressure) ordered by "
                 "a transparent mechanical key. "
-                "Use on opaque global symptoms (timeout/hang) when you don't know which "
-                "of many interfaces misbehaves — it collapses N suggest+inspect "
-                "round-trips into one. Always interpret flagged_count together with "
+                "Use for timeout/hang when the responsible interface is unknown. Interpret flagged_count with "
                 "coverage_status: zero_coverage means no protocol interfaces were "
                 "checked and is NOT a pass; truncated/degraded means partial coverage. "
                 "Read discovery for enumeration budgets, exact scope totals or lower bounds; "
@@ -7766,7 +7760,7 @@ async def list_tools():
                     },
                     "max_interfaces": {
                         "type": "integer",
-                        "description": "Max interfaces to sweep (default 64). Increase for more discovered interfaces when this cap is the only gap; discovery and transition truncation need scope/window changes.",
+                        "description": "Interface cap (default 64). Increase for a cap-only gap; discovery/transition gaps need scope/window changes.",
                         "default": 64,
                     },
                 },
