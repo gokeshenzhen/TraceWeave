@@ -15,6 +15,39 @@ WAVE = str(Path(__file__).parent / "fixtures" / "cycle_test.vcd")
 
 
 @pytest.mark.anyio
+async def test_discovered_parse_call_recovers_from_wrong_log_parameter(tmp_path, monkeypatch):
+    server.reset_session_state()
+    log = tmp_path / "run.log"
+    log.write_text("UVM_ERROR top_tb.sv(10) @ 10 ns: reporter [SCB] compare failed\n")
+    compile_log = tmp_path / "compile.log"
+    compile_log.write_text("xrun\nxmelab\n")
+    recorded = Mock()
+    monkeypatch.setattr(server.usage_telemetry, "record_call", recorded)
+    try:
+        async with create_connected_server_and_client_session(server.app) as session:
+            wrong = await session.call_tool("parse_sim_log", {
+                "sim_log": str(log), "simulator": "xcelium",
+            })
+            assert wrong.isError
+            assert "Use log_path for parse_sim_log" in wrong.content[0].text
+            recorded.assert_not_called()
+            assert server._result_cache["parse_sim_log"] is None
+
+            discovered = await session.call_tool("get_sim_paths", {
+                "verif_root": str(tmp_path), "sim_log": str(log),
+                "compile_log": str(compile_log),
+            })
+            action = json.loads(discovered.content[0].text)["suggested_calls"][0]
+            parsed = await session.call_tool(action["tool"], action["arguments"])
+            assert not parsed.isError
+            result = json.loads(parsed.content[0].text)
+            assert result["log_file"] == str(log.resolve())
+            assert result["runtime_total_errors"] == 1
+    finally:
+        server.reset_session_state()
+
+
+@pytest.mark.anyio
 async def test_keyword_limit_is_recoverable_before_any_search(monkeypatch):
     wave_work = Mock(side_effect=AssertionError("search must not execute"))
     recorded = Mock()

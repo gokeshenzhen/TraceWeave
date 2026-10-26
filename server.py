@@ -407,7 +407,9 @@ def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | Non
     return None
 
 
-def _build_suggested_call(step: str) -> dict:
+def _build_suggested_call(
+    step: str, *, sim_paths: schemas.SimPathsResult | None = None,
+) -> dict:
     if step == "get_sim_paths":
         return {"tool": "get_sim_paths", "arguments": {}}
     if step in {"build_tb_hierarchy", "prepare_design_context"}:
@@ -419,7 +421,7 @@ def _build_suggested_call(step: str) -> dict:
             return {"tool": step, "arguments": args}
         return {"tool": step, "arguments": {}}
     if step == "parse_sim_log":
-        sim_result = _result_cache.get("get_sim_paths")
+        sim_result = sim_paths if sim_paths is not None else _result_cache.get("get_sim_paths")
         if sim_result and sim_result.sim_logs:
             return {
                 "tool": "parse_sim_log",
@@ -1695,7 +1697,8 @@ Simulation waveform debug workflow:
      scan, use the same compile_log and simulator; do not wait for parse_sim_log results.
      Structural risks that overlap with failing signal paths are high-priority root cause candidates.
 
-3. Call parse_sim_log with sim_logs[0].path and simulator from step 1 when sim_logs is non-empty.
+3. Call parse_sim_log(log_path=sim_logs[0].path, simulator=simulator) when sim_logs is non-empty.
+   Use the discovered suggested_calls entry; sim_log is a get_sim_paths input only.
    - Prefer normalized failure_events[].time_ps over re-parsing raw message text.
    - Use grouped errors to choose the first group_index to inspect.
    - first_group_context contains a small window (~12 lines each side) of raw log
@@ -6381,7 +6384,8 @@ async def list_tools():
                 "If case_name is omitted, the tool returns available cases. "
                 "For non-standard layouts you may pass explicit sim_log / wave_file / compile_log "
                 "paths; any provided field is used as-is and the omitted ones are still auto-discovered "
-                "(a sim_log path also anchors discovery of the matching waveform and compile/elab logs)."
+                "(a sim_log path also anchors discovery of the matching waveform and compile/elab logs). "
+                "suggested_calls includes parse_sim_log arguments using log_path when a log and simulator are known."
             ),
             inputSchema={
                 "type": "object",
@@ -6454,7 +6458,8 @@ async def list_tools():
             name="parse_sim_log",
             description=(
                 "Group runtime failures from VCS, Xcelium, or Verilator logs. "
-                "Requires simulator. Includes first-group context. candidate_previous_logs excludes compile/elaboration logs with bounded sampling. "
+                "Pass log_path and simulator, using get_sim_paths.suggested_calls. "
+                "Includes first-group context. candidate_previous_logs excludes compile/elaboration logs with bounded sampling. "
                 "Verilator compiler/host diagnostics are excluded; unknown time stays null."
             ),
             inputSchema={
@@ -6466,7 +6471,7 @@ async def list_tools():
                     },
                     "log_path": {
                         "type": "string",
-                        "description": "Absolute path to the simulation log, for example irun.log",
+                        "description": "Absolute simulation log path from get_sim_paths.sim_logs[].path. This tool uses log_path; discovery uses sim_log.",
                     },
                     "simulator": {"type": "string", "description": "vcs / xcelium / verilator"},
                     "max_groups": {
@@ -9273,6 +9278,10 @@ async def _dispatch_inner(name: str, args: dict):
         )
         _update_session_state(name, args, result)
         validated = schemas.SimPathsResult.model_validate(result)
+        if validated.sim_logs and validated.simulator:
+            validated.suggested_calls = [
+                _build_suggested_call("parse_sim_log", sim_paths=validated)
+            ]
         _result_cache["get_sim_paths"] = validated
         _result_provenance["get_sim_paths"] = _build_result_provenance(
             name, args, validated

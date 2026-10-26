@@ -150,7 +150,11 @@ def recover_tool_input_errors(app):
                 if tool is not None:
                     validators.validate(tool.name, tool.inputSchema, arguments)
             except jsonschema.ValidationError as exc:
-                return app._make_error_result(f"Input validation error: {exc.message}")
+                message = f"Input validation error: {exc.message}"
+                if (request.params.name == "parse_sim_log"
+                        and "sim_log" in arguments and "log_path" not in arguments):
+                    message += " Use log_path for parse_sim_log; sim_log is a get_sim_paths input."
+                return app._make_error_result(message)
             except Exception as exc:
                 return app._make_error_result(str(exc))
             return await sdk_handler(request)

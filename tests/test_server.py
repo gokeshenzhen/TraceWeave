@@ -210,6 +210,10 @@ class TestDispatchGetSimPaths:
             assert result["wave_files"][0]["format"] == "fsdb"
             assert result["available_cases"] == []
             assert "fsdb_runtime" in result
+            assert result.suggested_calls == [{
+                "tool": "parse_sim_log",
+                "arguments": {"log_path": str(sim_log.resolve()), "simulator": "xcelium"},
+            }]
 
 
 @pytest.mark.anyio

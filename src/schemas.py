@@ -224,6 +224,7 @@ class SimPathsResult(SchemaModel):
     available_cases: list[CaseInfo] = Field(default_factory=list)
     hints: list[str] = Field(default_factory=list)
     next_required_step: NextRequiredStep | None = None
+    suggested_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FormalProjectEntry(SchemaModel):

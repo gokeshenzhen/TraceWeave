@@ -3893,6 +3893,10 @@ a separate cycle query; query a direct data input for another explicit hop.
 
 ## Runtime log formats
 
+`get_sim_paths.suggested_calls` supplies a callable `parse_sim_log` action when
+the log path and simulator are known. Discovery accepts `sim_log`; parsing uses
+`log_path`. Snapshots and prerequisite recovery use the same call template.
+
 ### Custom checker messages
 
 `parse_sim_log` already recognizes standard `UVM_ERROR` / `UVM_FATAL` messages and VCS / Xcelium assertion failures, with a generic `ERROR` fallback. For project-specific checker, scoreboard, or `$display` output, add Python regular expressions to [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml). Custom messages do not need to contain `UVM_ERROR` or even `ERROR`; no Python changes are required.
