@@ -134,7 +134,7 @@ from src.verify_condition import (
     _resolve_signal_path,
 )
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
-from src.handshake_sweep import sweep_handshake_anomalies
+from src.handshake_sweep import sweep_handshake_anomalies, build_sweep_followup_actions, sweep_coverage_gaps
 from src.window_verify import verify_window
 from src.txn_reconstruct import reconstruct_transactions
 from src.tlul import inspect_tlul
@@ -7765,7 +7765,7 @@ async def list_tools():
                     },
                     "max_interfaces": {
                         "type": "integer",
-                        "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.",
+                        "description": "Max interfaces to sweep (default 64). Increase for more discovered interfaces when this cap is the only gap; discovery and transition truncation need scope/window changes.",
                         "default": 64,
                     },
                 },
@@ -10182,13 +10182,13 @@ async def _dispatch_inner(name: str, args: dict):
         sweep_needs_attention = _sweep_coverage_incomplete(sweep_cache) and (
             sweep_cache is not None or (has_failure_context and protocol_symptom)
         )
-        sweep_call = (
-            _build_sweep_suggested_call(args["wave_path"], sweep_cache)
+        sweep_calls = (
+            _build_sweep_suggested_calls(args["wave_path"], sweep_cache)
             if sweep_needs_attention
-            else None
+            else []
         )
-        if sweep_call is not None:
-            result.setdefault("suggested_next_actions", []).append(sweep_call)
+        if sweep_calls:
+            result.setdefault("suggested_next_actions", []).extend(sweep_calls)
         elif sweep_needs_attention:
             result.setdefault("why", []).append(_describe_non_actionable_sweep(sweep_cache))
         if missing_scan:
@@ -10927,10 +10927,17 @@ def _build_sweep_suggested_call(
     wave_path: str | None,
     sweep_result: schemas.HandshakeSweepResult | None = None,
 ) -> dict | None:
+    return next(iter(_build_sweep_suggested_calls(wave_path, sweep_result)), None)
+
+
+def _build_sweep_suggested_calls(
+    wave_path: str | None,
+    sweep_result: schemas.HandshakeSweepResult | None = None,
+) -> list[dict]:
     if not wave_path:
-        return None
+        return []
     if sweep_result is None:
-        return {
+        return [{
             "tool": "sweep_handshakes",
             "arguments": {"wave_path": wave_path},
             "reason": (
@@ -10938,29 +10945,24 @@ def _build_sweep_suggested_call(
                 "a timeout/hang or compare symptom, consider a bounded handshake sweep. "
                 "Choose scope/window from evidence, or inspect a known interface directly."
             ),
-        }
-    if sweep_result.coverage_status == "complete":
-        return None
+        }]
+    if (sweep_result.coverage_status == "complete"
+            or not _same_realpath(wave_path, sweep_result.wave_path)):
+        return []
 
-    for action in sweep_result.suggested_next_actions:
+    result = sweep_result.model_dump()
+    actions, seen = [], set()
+    candidates = [action for action in sweep_result.suggested_next_actions
+                  if _sweep_action_makes_progress(action, wave_path, sweep_result)]
+    if not candidates:
+        candidates = build_sweep_followup_actions(result)
+    for action in candidates:
         if _sweep_action_makes_progress(action, wave_path, sweep_result):
-            return action
-    if sweep_result.coverage_status == "truncated":
-        target = max(
-            int(sweep_result.discovered_count or 0),
-            int(sweep_result.interface_count or 0),
-        )
-        if target > int(sweep_result.interface_count or 0):
-            return {
-                "tool": "sweep_handshakes",
-                "arguments": {"wave_path": wave_path, "max_interfaces": target},
-                "reason": (
-                    "Previous sweep_handshakes coverage was truncated, so it was not "
-                    "a complete protocol scan. Re-run with max_interfaces high enough "
-                    "to cover every discovered interface."
-                ),
-            }
-    return None
+            key = (action["tool"], json.dumps(action["arguments"], sort_keys=True))
+            if key not in seen:
+                actions.append(action)
+                seen.add(key)
+    return actions
 
 
 def _sweep_action_makes_progress(
@@ -10968,7 +10970,8 @@ def _sweep_action_makes_progress(
     wave_path: str,
     sweep_result: schemas.HandshakeSweepResult,
 ) -> bool:
-    if action.get("tool") != "sweep_handshakes":
+    tool = action.get("tool")
+    if tool not in {"sweep_handshakes", "suggest_handshakes", "suggest_protocol_bundles"}:
         return False
     arguments = action.get("arguments")
     if not isinstance(arguments, dict) or not arguments:
@@ -10979,12 +10982,18 @@ def _sweep_action_makes_progress(
 
     prior_scope = sweep_result.scope or None
     next_scope = arguments.get("scope") or None
+    if tool != "sweep_handshakes":
+        return bool(next_scope and next_scope != prior_scope and (
+            not prior_scope or next_scope.startswith(prior_scope.rstrip(".") + ".")
+        ))
     if prior_scope != next_scope:
-        # Removing a scope, or moving to a strict parent, expands discovery.
-        # Adding/narrowing a scope after an unscoped sweep cannot complete the
-        # whole-design default-flow check.
-        if prior_scope and next_scope is None:
+        # A narrower investigation may make progress while global coverage
+        # remains incomplete. Parent scopes can recover empty scoped discovery.
+        if next_scope and (not prior_scope or next_scope.startswith(prior_scope.rstrip(".") + ".")):
             return True
+        if prior_scope and next_scope is None:
+            return not (sweep_result.coverage_status == "zero_coverage"
+                        and "discovery_incomplete" in sweep_coverage_gaps(sweep_result.model_dump()))
         if (
             prior_scope
             and next_scope
@@ -10998,12 +11007,10 @@ def _sweep_action_makes_progress(
             next_max = int(arguments.get("max_interfaces"))
         except (TypeError, ValueError):
             next_max = 0
-        return next_max >= int(sweep_result.discovered_count or 0) and next_max > int(
-            sweep_result.interface_count or 0
-        )
-
-    if sweep_result.coverage_status != "degraded":
-        return False
+        if (sweep_coverage_gaps(sweep_result.model_dump()) == ["interface_cap"]
+                and next_max >= int(sweep_result.discovered_count or 0)
+                and next_max > int(sweep_result.interface_count or 0)):
+            return True
     if arguments.get("edge", sweep_result.edge) != sweep_result.edge:
         return True
 

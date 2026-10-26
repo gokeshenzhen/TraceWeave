@@ -173,9 +173,16 @@ Verification
   Recommendations use `suggested_next_actions`; diagnostic sections use
   `suggested_call`. Both retain `not_run` or the actual scope/window coverage,
   including when no finding exists. `not_run` is distinct from `zero_coverage`.
-  Protocol coverage and retry actionability are separate. Server routing relays
-  only a sweep action that expands scope, narrows the time window, changes the
-  edge, or raises a truncated interface cap. An unscoped zero-interface sweep
+  Protocol coverage and retry actionability are separate. Actions carry
+  `reason_code`, `addresses`, and `remaining_gaps`. Discovery limits prefer
+  metadata discovery in observed child scopes; the scope is a choice, not a
+  symptom or root-cause ranking. A larger interface cap is suggested only when
+  it is the sole known gap. Transition-prefix limits need a shorter window:
+  an observed stall anchor may supply its start; an unknown anchor remains a
+  prerequisite rather than an invented time. Actions preserve wave identity
+  and applicable sampling parameters. Server routing accepts smaller scopes
+  and windows even for `truncated` results without upgrading global coverage.
+  An unscoped zero-interface sweep
   and a degraded sweep with no such action retain their warning/coverage receipt
   but do not generate an identical suggested call. Recommendation output carries
   `runtime_protocol_coverage` even when no interface finding exists.

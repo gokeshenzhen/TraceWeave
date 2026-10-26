@@ -282,9 +282,12 @@ def _retry_without_scope_action(
 ) -> dict[str, Any]:
     return {
         "tool": "sweep_handshakes",
+        "reason_code": "empty_scope",
+        "addresses": ["discovery_scope"],
+        "remaining_gaps": [],
         "reason": (
-            "Retry without scope to establish design-level protocol coverage; "
-            "the scoped sweep checked zero interfaces."
+            "Look for supported interfaces outside the empty scope; the prior "
+            "sweep checked zero interfaces. Read the new discovery and coverage limits."
         ),
         "arguments": {
             "wave_path": wave_path,
@@ -310,6 +313,9 @@ def _retry_truncated_action(
 ) -> dict[str, Any]:
     return {
         "tool": "sweep_handshakes",
+        "reason_code": "interface_cap",
+        "addresses": ["interface_cap"],
+        "remaining_gaps": [],
         "reason": (
             f"Previous sweep discovered {discovered_count} interfaces but only "
             f"swept {max_interfaces} due to cap. Re-run with max_interfaces>={discovered_count} "
@@ -325,6 +331,101 @@ def _retry_truncated_action(
             **({"scope": scope} if scope else {}),
         },
     }
+
+
+def sweep_coverage_gaps(result: dict[str, Any]) -> list[str]:
+    """Independent analysis limits; neither findings nor display size repairs them."""
+    gaps = []
+    if any(d.get("status") == "partial" for d in (result.get("discovery") or {}).values()):
+        gaps.append("discovery_incomplete")
+    if result.get("truncated") or result.get("coverage_status") == "truncated":
+        gaps.append("interface_cap")
+    if result.get("transition_truncated_count") or any(
+        row.get("transition_data_truncated") for row in result.get("interfaces", [])
+    ):
+        gaps.append("transition_truncated")
+    if result.get("skipped"):
+        gaps.append("skipped_checks")
+    return gaps
+
+
+def build_sweep_followup_actions(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Use observed scopes/anchors only; missing prerequisites remain warnings.
+
+    Scoped discovery is metadata work, not another all-time interface scan.
+    A larger interface cap is suggested only when it is the sole known gap.
+    """
+    check_cancelled()
+    wave_path = result["wave_path"]
+    scope = result.get("scope") or None
+    start_ps, end_ps = int(result.get("start_ps", 0)), int(result.get("end_ps", -1))
+    edge = result.get("edge", "posedge")
+    max_interfaces = int(result.get("max_interfaces", result.get("interface_count") or DEFAULT_MAX_INTERFACES))
+    max_wait_cycles = int(result.get("max_wait_cycles", 16))
+    gaps = sweep_coverage_gaps(result)
+    actions = []
+    if "discovery_incomplete" in gaps:
+        seen = set()
+        for row in result.get("interfaces", []):
+            check_cancelled()
+            child = row.get("scope")
+            if (not child or child in seen or child == scope
+                    or scope and not child.startswith(scope.rstrip(".") + ".")):
+                continue
+            seen.add(child)
+            ahb = row.get("kind") == "ahb"
+            actions.append({
+                "tool": "suggest_protocol_bundles" if ahb else "suggest_handshakes",
+                "arguments": {"wave_path": wave_path, "scope": child, "max_candidates": 8,
+                              **({"protocol": "ahb"} if ahb else {})},
+                "reason_code": "discovery_incomplete",
+                "addresses": ["discovery_incomplete"],
+                "remaining_gaps": [*gaps, "outside_selected_scope"],
+                "reason": (
+                    "If this observed child scope is relevant to the symptom, discover its "
+                    "interfaces first. This is metadata discovery only; it does not sample "
+                    "the prior time window or establish coverage outside this scope."
+                ),
+            })
+            if len(actions) == 2:
+                break
+    if "transition_truncated" in gaps:
+        for row in result.get("interfaces", []):
+            check_cancelled()
+            anchor = row.get("max_stall_begin_ps")
+            if (not row.get("transition_data_truncated") or type(anchor) is not int
+                    or anchor <= start_ps or end_ps >= 0 and anchor > end_ps):
+                continue
+            target_scope = row.get("scope") or scope
+            actions.append({
+                "tool": "sweep_handshakes",
+                "arguments": {"wave_path": wave_path, "edge": edge,
+                              "start_time_ps": anchor, "end_time_ps": end_ps,
+                              "max_interfaces": max_interfaces, "max_wait_cycles": max_wait_cycles,
+                              **({"scope": target_scope} if target_scope else {})},
+                "reason_code": "transition_truncated",
+                "addresses": ["transition_truncated"],
+                "remaining_gaps": [*gaps, "outside_selected_window"],
+                "reason": (
+                    "Retry from the observed stall anchor in this interface scope. "
+                    "The shorter history may still hit limits; inspect the new coverage. "
+                    "Earlier history and other scopes remain unchecked by this action."
+                ),
+            })
+            break
+    if (gaps == ["interface_cap"]
+            and int(result.get("discovered_count", 0)) > int(result.get("interface_count", 0))):
+        actions.append(_retry_truncated_action(
+            wave_path=wave_path, edge=edge, start_ps=start_ps, end_ps=end_ps,
+            max_wait_cycles=max_wait_cycles, max_interfaces=max_interfaces,
+            discovered_count=int(result.get("discovered_count", 0)), scope=scope,
+        ))
+    elif not gaps and scope and result.get("coverage_status") == "zero_coverage":
+        actions.append(_retry_without_scope_action(
+            wave_path=wave_path, edge=edge, start_ps=start_ps, end_ps=end_ps,
+            max_wait_cycles=max_wait_cycles, max_interfaces=max_interfaces,
+        ))
+    return actions
 
 
 # AXI channel markers, most-specific first: the address channels (AR/AW) share
@@ -759,7 +860,6 @@ def sweep_handshake_anomalies(
         reason = None
 
     coverage_warnings: list[str] = []
-    suggested_next_actions: list[dict[str, Any]] = []
     if not normalized:
         coverage_status = "zero_coverage"
         warning = (
@@ -773,16 +873,6 @@ def sweep_handshake_anomalies(
                 "from the dumped interface signals; retry without scope or with a "
                 "parent/interface scope."
             )
-            suggested_next_actions.append(
-                _retry_without_scope_action(
-                    wave_path=wave_path,
-                    edge=edge,
-                    start_ps=start_ps,
-                    end_ps=end_ps,
-                    max_wait_cycles=max_wait_cycles,
-                    max_interfaces=max_interfaces,
-                )
-            )
         coverage_warnings.append(warning)
     else:
         coverage_status = "complete"
@@ -792,31 +882,20 @@ def sweep_handshake_anomalies(
         coverage_warnings.append(
             f"COVERAGE TRUNCATED: {discovered} interfaces discovered but only "
             f"{len(to_inspect)} swept (max_interfaces={max_interfaces}). The dropped "
-            "interfaces are the tail of suggest's ordering; re-run with "
-            f"max_interfaces>={discovered} to inspect more discovered candidates. "
-            "This does not repair discovery or skipped-row gaps."
-        )
-        suggested_next_actions.append(
-            _retry_truncated_action(
-                wave_path=wave_path,
-                edge=edge,
-                start_ps=start_ps,
-                end_ps=end_ps,
-                max_wait_cycles=max_wait_cycles,
-                discovered_count=discovered,
-                max_interfaces=max_interfaces,
-                scope=scope,
-            )
+            "interfaces are the tail of suggest's ordering. A larger cap checks "
+            "more discovered candidates but does not repair discovery, transition "
+            "or skipped-row gaps. Choose a follow-up for the actual limits."
         )
     if transition_truncated_count:
         if coverage_status == "complete":
             coverage_status = "degraded"
         coverage_warnings.append(
-            "COVERAGE DEGRADED: native transition data was truncated for "
+            "COVERAGE DEGRADED: transition data was truncated for "
             f"{transition_truncated_count} inspected interface(s). Findings and "
             "zero counts cover only returned prefixes; flagged_count=0 is not a "
-            "clean-protocol conclusion. Narrow the time window for a complete "
-            "targeted check until bounded-memory streaming is available."
+            "clean-protocol conclusion. Choose a shorter failure-correlated time "
+            "window and inspect its coverage. Without a verified time anchor, "
+            "no narrower window is inferred."
         )
 
     if discovery_incomplete:
@@ -859,7 +938,6 @@ def sweep_handshake_anomalies(
         "discovery": discovery,
         "coverage_status": coverage_status,
         "coverage_warnings": coverage_warnings,
-        "suggested_next_actions": suggested_next_actions,
         "finding_summary": finding_summary,
         "interfaces": interfaces,
         "skipped": skipped,
@@ -867,6 +945,9 @@ def sweep_handshake_anomalies(
         "note": note,
         "reason": reason,
     }
+    result["suggested_next_actions"] = build_sweep_followup_actions({
+        **result, "max_wait_cycles": max_wait_cycles, "max_interfaces": max_interfaces,
+    })
     operation_metrics.set_value(
         "sweep_result_build_ms",
         (time.perf_counter() - result_build_started) * 1000.0,

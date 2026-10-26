@@ -234,6 +234,10 @@ Step 4 (optional): sweep_handshakes(wave_path, scope?, start_time_ps?, end_time_
 │    an exact scope count; scope_total_lower_bound is only a lower bound. Narrow
 │    scope when a discovery budget is exhausted. Raising max_interfaces only
 │    checks more already-discovered candidates.
+│  - Suggested actions identify the gap addressed and the gaps that remain.
+│    With several limits, prefer scoped metadata discovery and a justified
+│    smaller window. A larger interface cap is suggested only for a cap-only
+│    gap. Unknown time anchors are not replaced with guessed windows.
 │  - Idle ready remains a count, with no anomaly flag or ranking weight. Req/ack
 │    names do not establish valid-hold semantics and automatic sweeps skip them.
 │    Supply confirmed semantics in an explicit inspect_handshake call. Ambiguous

@@ -1104,7 +1104,7 @@ class TestParseSimLogSweepNextStep:
             )
 
             assert res.protocol_symptom_next_step is not None
-            assert res.protocol_symptom_next_step.model_dump() == retry
+            assert res.protocol_symptom_next_step.model_dump(exclude_none=True) == retry
         finally:
             server._result_cache.pop("get_sim_paths", None)
 

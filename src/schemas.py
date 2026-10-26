@@ -707,6 +707,9 @@ class SuggestedToolCall(SchemaModel):
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     reason: str | None = None
+    reason_code: str | None = None
+    addresses: list[str] | None = None
+    remaining_gaps: list[str] | None = None
 
 
 class ParseSimLogResult(TruncatableResult):
@@ -721,12 +724,9 @@ class ParseSimLogResult(TruncatableResult):
     # diluted past a weak model's attention. Field order = serialized JSON order,
     # so this surfaces the pointer before the big payloads.
     protocol_symptom_hint: str | None = None
-    # The actionable companion to protocol_symptom_hint: the concrete
-    # sweep_handshakes(...) call with wave_path already filled from the cached
-    # get_sim_paths. Set by the server ONLY when the hint fires AND a waveform is
-    # available — the prose hint alone gets skipped by weak models, so the call is
-    # spelled out at the one layer where the symptom and the wave path co-exist
-    # (the suggest->inspect relay lesson applied to parse->sweep). Suggestion only.
+    # Optional sweep or coverage-repair discovery action, bound to a waveform
+    # from the same discovery observation as this log. Missing time/scope
+    # evidence stays explicit; this is never a required workflow step.
     protocol_symptom_next_step: SuggestedToolCall | None = None
     simulator: str
     schema_version: str
