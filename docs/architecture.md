@@ -2523,6 +2523,29 @@ summaries. It does not retain argument values or source text.
   operations additionally attach a strictly whitelisted `diagnostics` block:
   wave-lock wait, fixed sweep phase, aggregate search count/total/max duration,
   discovery phase durations, and preemption-to-cancel latency.
+- VCD cold loads and runtime-log parsing additionally record numeric
+  `vcd_*` / `log_*` input costs: `parse_calls`, `parse_completed`,
+  `parse_wall_ms`, `parse_cpu_ms`, `read_ms`, `input_bytes`, and
+  `parse_rss_start_kib` / `parse_rss_end_kib`. Attempts include failed or
+  cancelled loads; completion requires the parser's normal successful return
+  (including VCD identity validation). `input_bytes` sums observed file sizes
+  for completed reads, not physical disk I/O or decoded-object size. Repeated
+  log reads count again. Reusing an already parsed VCD records no new parse.
+  RSS values are process samples at entry/exit, not input-attributed peaks;
+  CPU is process CPU. Input timing is nested within discovery/sweep timing,
+  so these durations must not be added together. Both telemetry allowlists
+  reject paths, arbitrary labels and nonnumeric input-cost values.
+  VCD scope/window limits reduce work after the first full-file parse;
+  `get_waveform_summary` also triggers that initial parse.
+- `scripts/benchmark_input_costs.py` is a serial VCD/log backend microbenchmark.
+  Supply immutable `--wave` and optional `--next-wave`, `--log`, `--next-log`,
+  with a new `--output` directory and the same `--source-root`/input conditions
+  for each comparison. It retains input/source hashes, actual facts, wall/CPU,
+  RSS samples and process high-water RSS. Input hashing primes OS caches;
+  cold means a new parser/process. Same-wave repeats reuse its parser; the
+  new wave loads while the initial parser remains resident. Log repeats are
+  repeated reads. Handler, scheduler, transport and log snapshot costs are
+  excluded. This is deterministic tool measurement, not an Agent A/B run.
 - Source Graph calls use a second, independently enforced persistent allowlist.
   It accepts only finite non-negative numeric aggregates plus fixed phase,
   `memory`/`disk`/`build`/`handoff` tier, and disk-validation labels. Numeric fields cover

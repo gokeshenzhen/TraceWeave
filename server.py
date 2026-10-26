@@ -7729,7 +7729,8 @@ async def list_tools():
                 "FSDB native transition-buffer truncation is propagated per row and "
                 "forces degraded coverage; zero findings then cover only returned prefixes. "
                 "Returns FACTS, not a root-cause verdict; re-rank as the symptom "
-                "warrants. Reads existing waveforms only."
+                "warrants. VCD first use parses the entire file; scope/window reduce "
+                "subsequent analysis work. Reads existing waveforms only."
             ),
             inputSchema={
                 "type": "object",
@@ -8315,7 +8316,9 @@ async def list_tools():
                     ('failure_event','failure_time_ps','log_path')]},'else':{'required':['clock']}}]
             tool.description+=' property: use an explain_property include_check_plan handle plus failure event/time or log_path. Automatically locate history/attempts; scope/bindings resolve names. Read status, coverage and gaps; not_reproduced is not a global pass.'
         if tool.name == "get_waveform_summary":
-            tool.description += " Optional FST: see fst_backend/fst_reading capabilities and gaps."
+            tool.description += (
+                " VCD first use reads/parses the entire file, including for this summary. "
+                "Optional FST: see fst_backend/fst_reading capabilities and gaps.")
         if tool.name in selectable or tool.name == 'inspect_tlul':
             tool.inputSchema['$defs'] = _signal_selection_definitions()
             tool.description += (

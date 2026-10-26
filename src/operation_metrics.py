@@ -153,6 +153,12 @@ _SWEEP_STREAM_FIELDS = {
     "sweep_stream_block_bytes_peak", "sweep_stream_work_limit_stops",
 }
 _PUBLIC_FIELDS.update(_SWEEP_STREAM_FIELDS)
+_INPUT_KINDS = {"vcd", "log"}
+_INPUT_SUFFIXES = {
+    "parse_calls", "parse_completed", "parse_wall_ms", "parse_cpu_ms",
+    "read_ms", "input_bytes", "parse_rss_start_kib", "parse_rss_end_kib",
+}
+_PUBLIC_FIELDS.update(f"{kind}_{suffix}" for kind in _INPUT_KINDS for suffix in _INPUT_SUFFIXES)
 
 
 def record_sweep_stream(name: str, value: int, *, peak: bool = False) -> None:
@@ -618,6 +624,55 @@ def read_process_rss_kib() -> int | None:
     except (OSError, ValueError, IndexError):
         return None
     return None
+
+
+@contextmanager
+def input_parse(kind: str) -> Iterator[None]:
+    """Per-request input attempts, including failures, with no retained identity.
+
+    Wall/CPU include reading and materialization. RSS samples are process RSS
+    at entry/exit, not an input-attributed peak. Nested sweep phases include
+    this work, so their times must not be added to these input timings.
+    """
+    metrics = current()
+    if kind not in _INPUT_KINDS or metrics is None:
+        yield
+        return
+    rss_start = read_process_rss_kib()
+    with metrics.lock:
+        metrics.values[f"{kind}_parse_calls"] = int(metrics.values.get(f"{kind}_parse_calls", 0)) + 1
+        metrics.values.setdefault(f"{kind}_parse_completed", 0)
+        if rss_start is not None:
+            metrics.values.setdefault(f"{kind}_parse_rss_start_kib", rss_start)
+    started, cpu_started = time.perf_counter(), time.process_time()
+    completed = False
+    try:
+        yield
+        completed = True
+    finally:
+        wall_ms = (time.perf_counter() - started) * 1000.0
+        cpu_ms = (time.process_time() - cpu_started) * 1000.0
+        rss_end = read_process_rss_kib()
+        with metrics.lock:
+            for suffix, value in (("parse_wall_ms", wall_ms), ("parse_cpu_ms", cpu_ms)):
+                key = f"{kind}_{suffix}"
+                metrics.values[key] = float(metrics.values.get(key, 0.0)) + value
+            metrics.values[f"{kind}_parse_completed"] += int(completed)
+            if rss_end is not None:
+                metrics.values[f"{kind}_parse_rss_end_kib"] = rss_end
+
+
+def record_input_read(kind: str, duration_ms: float, input_bytes: int | None) -> None:
+    """Aggregate read/decode time and observed file sizes, never file contents."""
+    metrics = current()
+    if kind not in _INPUT_KINDS or metrics is None:
+        return
+    with metrics.lock:
+        key = f"{kind}_read_ms"
+        metrics.values[key] = float(metrics.values.get(key, 0.0)) + duration_ms
+        if type(input_bytes) is int and input_bytes >= 0:
+            key = f"{kind}_input_bytes"
+            metrics.values[key] = int(metrics.values.get(key, 0)) + input_bytes
 
 
 def record_sweep_rss(*, phase: str) -> None:

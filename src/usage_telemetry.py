@@ -192,6 +192,10 @@ _DIAGNOSTIC_WHITELIST = {
     "source_graph_trace_artifact_attempt_count",
     "source_graph_trace_scope_expansion_count",
     "source_graph_trace_restart_count",
+    "vcd_parse_calls", "vcd_parse_completed", "vcd_parse_wall_ms", "vcd_parse_cpu_ms",
+    "vcd_read_ms", "vcd_input_bytes", "vcd_parse_rss_start_kib", "vcd_parse_rss_end_kib",
+    "log_parse_calls", "log_parse_completed", "log_parse_wall_ms", "log_parse_cpu_ms",
+    "log_read_ms", "log_input_bytes", "log_parse_rss_start_kib", "log_parse_rss_end_kib",
 }
 _DIAGNOSTIC_FIXED_LABELS = {
     "sweep_phase": {

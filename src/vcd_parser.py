@@ -5,6 +5,8 @@ The public API matches FSDBParser.
 """
 
 import re
+import os
+import time
 from array import array
 from contextlib import contextmanager
 from bisect import bisect_left, bisect_right
@@ -12,6 +14,7 @@ from operator import itemgetter
 from itertools import islice
 from pathlib import Path
 from .cancellation import check_cancelled
+from . import operation_metrics
 from .scope_metadata import (PAGE_ITEMS, PAGE_BYTES, PAGE_SCAN, ScopeCursor,
                              ScopeIdentityChanged, file_identity, normalize_scope, page_limits)
 
@@ -304,20 +307,20 @@ class VCDParser:
 
     def _ensure_parsed(self):
         if not self._parsed:
-            check_cancelled()
-            identity = file_identity(self.file_path)
-            try:
-                self._parse()
+            with operation_metrics.input_parse("vcd"):
                 check_cancelled()
-                if file_identity(self.file_path) != identity:
-                    raise ScopeIdentityChanged("VCD changed while parsing")
-            except BaseException:
-                # A cancelled or failed first load must not leave records that
-                # a subsequent request could append to or query as complete.
-                VCDParser.__init__(self, self.file_path)
-                raise
-            self._parsed_identity = identity
-            self._parsed = True
+                identity = file_identity(self.file_path)
+                try:
+                    self._parse()
+                    check_cancelled()
+                    if file_identity(self.file_path) != identity:
+                        raise ScopeIdentityChanged("VCD changed while parsing")
+                except BaseException:
+                    # Failed/cancelled loads cannot publish a partial cache.
+                    VCDParser.__init__(self, self.file_path)
+                    raise
+                self._parsed_identity = identity
+                self._parsed = True
 
     def _resolve(self, signal_path: str) -> str:
         if signal_path in self._path_to_sym:
@@ -331,8 +334,15 @@ class VCDParser:
     def _parse(self):
         if not Path(self.file_path).exists():
             raise FileNotFoundError(f"VCD file does not exist: {self.file_path}")
+        read_started = time.perf_counter()
+        input_bytes = None
         with open(self.file_path, "r", errors="replace") as f:
+            if operation_metrics.current() is not None:
+                input_bytes = os.fstat(f.fileno()).st_size
             content = f.read()
+        operation_metrics.record_input_read(
+            "vcd", (time.perf_counter() - read_started) * 1000.0, input_bytes,
+        )
 
         version = re.search(r'\$version\s+(.*?)\s*\$end', content, re.DOTALL)
         if version:

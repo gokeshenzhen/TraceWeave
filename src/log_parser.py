@@ -12,6 +12,7 @@ import hashlib
 import os
 import stat
 import re
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ from config import (
 )
 from .problem_hints import compute_problem_hints_from_events, event_has_x_or_z
 from .cancellation import check_cancelled
+from . import operation_metrics
 
 
 _VCS_ASSERT_RE = re.compile(
@@ -390,6 +392,10 @@ class SimLogParser:
         return _build_summary(self.parse_failure_events(), self.log_path, self.simulator, max_groups)
 
     def parse_failure_events(self) -> list[dict[str, Any]]:
+        with operation_metrics.input_parse("log"):
+            return self._parse_failure_events()
+
+    def _parse_failure_events(self) -> list[dict[str, Any]]:
         path = Path(self.log_path)
         if not path.exists():
             raise FileNotFoundError(f"Log file does not exist: {self.log_path}")
@@ -400,8 +406,12 @@ class SimLogParser:
             file_size = 0
         multiline_enabled = file_size <= MAX_LOG_FILE_SIZE_FOR_MULTILINE
 
+        read_started = time.perf_counter()
         with path.open("r", errors="replace") as handle:
             all_lines = handle.readlines()
+        operation_metrics.record_input_read(
+            "log", (time.perf_counter() - read_started) * 1000.0, file_size,
+        )
 
         self._bare_time_unit = _infer_bare_time_unit(all_lines, self.simulator)
 
