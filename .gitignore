@@ -17,6 +17,7 @@ novas.rc
 # Development plans, handoffs, logs, and evaluation evidence stay local.
 # Do not force-add ignored documentation or evidence.
 docs/*
+/docs2/
 !docs/architecture.md
 !docs/expressions.md
 !docs/debug-discipline.md
