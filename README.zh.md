@@ -85,7 +85,14 @@ traceweave-mcp --doctor
 
 ### 可选 FST 支持
 
-Linux 用户可在服务端 Python 环境安装 `traceweave-mcp[fst]`；仓库安装可使用 `.venv/bin/python -m pip install "pylibfst==0.2.1"`。重新连接后检查波形发现结果。详见 [FST 支持范围](docs/architecture.md#fst-basic-reading)。
+**仅仓库版可用。** 仓库在 PyPI 2.0.2 发布后才加入 FST 读取器和 `fst` 可选依赖。在 Linux 上，从仓库根目录使用服务端的 Python 环境安装依赖并检查状态。
+
+```bash
+.venv/bin/python -m pip install "pylibfst==0.2.1"
+.venv/bin/python -m traceweave_mcp --doctor
+```
+
+重新连接 MCP 服务器后，用 `get_waveform_summary` 打开一个小的 `.fst` 文件。返回的 `fst_backend.version` 是实际加载的读取器版本。详见 [FST 支持范围](docs/architecture.md#fst-basic-reading)。
 
 ## 客户端配置
 

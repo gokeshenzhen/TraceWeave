@@ -146,7 +146,7 @@ def main():
         import pylibfst
         from pylibfst import lib, ffi
     except ImportError as exc:
-        raise ValueError("fst_dependency_missing: install traceweave-mcp[fst] in the server interpreter") from exc
+        raise ValueError("fst_dependency_missing: install pylibfst==0.2.1 in the server interpreter") from exc
     if importlib.metadata.version("pylibfst") != "0.2.1":
         raise ValueError("fst_dependency_version_unsupported: requires pylibfst 0.2.1")
     # CFFI's loaded extension is the evidence source, not the Python facade.

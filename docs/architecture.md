@@ -1380,7 +1380,7 @@ and interface consumers reuse that pack's immutable spools; the batch closes
 on success, error or cancellation before the next pack begins. FSDB continues
 to use its existing native transition group and process-global lock.
 
-The optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
+The repository's optional `fst` extra pins `pylibfst==0.2.1` (BSD-3-Clause Python binding,
 bundled MIT libfst; compression dependencies retain their upstream licenses).
 TraceWeave supplies an adapter, without vendoring upstream source or shipping
 another native bridge. Use the dependency's wheel for the server interpreter;

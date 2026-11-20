@@ -85,7 +85,14 @@ For logs, VCD, and basic static analysis only, install `traceweave-mcp` without 
 
 ### Optional FST support
 
-On Linux, install `traceweave-mcp[fst]` in the server environment; repository users can install `pylibfst==0.2.1` with `.venv/bin/python -m pip install`. Reconnect the server and check waveform discovery. See [FST support and limits](docs/architecture.md#fst-basic-reading).
+**Repository installation only.** The FST reader and the `fst` extra were added after PyPI release 2.0.2. On Linux, run these commands from the repository root to install the dependency in the server's Python environment and check its status.
+
+```bash
+.venv/bin/python -m pip install "pylibfst==0.2.1"
+.venv/bin/python -m traceweave_mcp --doctor
+```
+
+Reconnect the MCP server and open a small `.fst` file with `get_waveform_summary`. The returned `fst_backend.version` identifies the loaded reader version. See [FST support and limits](docs/architecture.md#fst-basic-reading).
 
 ## Client Setup
 

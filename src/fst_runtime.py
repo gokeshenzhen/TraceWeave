@@ -134,7 +134,7 @@ def fst_runtime_info():
             "required_version": FST_VERSION, "installed_version": installed, "status": status,
             "message": ("FST candidate ready (native library not loaded); summary lists validated analyses"
                         if status == "candidate_ready_unloaded" else
-                        "FST requires Linux and traceweave-mcp[fst] in the server interpreter (pylibfst 0.2.1)")}
+                        f"FST requires Linux and pylibfst=={FST_VERSION} in the server interpreter")}
 
 
 class FstProcess:
