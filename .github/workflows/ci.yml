@@ -30,8 +30,35 @@ jobs:
           python -m pip freeze
 
       - name: Run tests
+        id: pytest
         run: |
-          python -m pytest tests/ -v --ignore=tests/test_fsdb_parser.py --ignore=tests/test_fsdb_runtime.py
+          python -m pytest tests/ -v --ignore=tests/test_fsdb_parser.py --ignore=tests/test_fsdb_runtime.py \
+            --tw-report "$RUNNER_TEMP/traceweave-pytest.json"
+
+      - name: Annotate regression failures
+        if: failure() && steps.pytest.conclusion == 'failure'
+        run: |
+          python - "$RUNNER_TEMP/traceweave-pytest.json" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          report_path = Path(sys.argv[1])
+          if not report_path.is_file():
+              raise SystemExit(0)
+
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          details = {
+              f"Failed {item['nodeid']}"
+              for item in report["outcomes"] if item["outcome"] == "failed"
+          }
+          details.update(f"Collection {item['outcome']} {item['nodeid']}" for item in report["collection_issues"])
+          details.update(f"Unexpected skip {item['nodeid']}" for item in report["unexpected_skips"])
+          if details:
+              summary = "\n".join(sorted(details)[:10])
+              message = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=TraceWeave portable regression::{message}")
+          PY
 
   package:
     runs-on: ubuntu-latest
