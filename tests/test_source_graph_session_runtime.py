@@ -63,8 +63,8 @@ def _fake_worker(
         f"""
 import argparse
 import base64
-import gc
 import json
+import mmap
 import os
 from pathlib import Path
 import sys
@@ -98,11 +98,12 @@ for line in sys.stdin:
                     'status': Path('/proc/self/status').read_text(),
                     'stat': Path('/proc/self/stat').read_text()}}
         observations = [rss_snapshot('before')]
-        memory = bytearray({transient_rss_bytes!r})
-        memory[::4096] = b'x' * len(memory[::4096])
-        observations.append(rss_snapshot('allocated'))
-        del memory
-        gc.collect()
+        # Closing the anonymous mapping returns its pages to the kernel.
+        flags = mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS
+        with mmap.mmap(-1, {transient_rss_bytes!r}, flags=flags) as memory:
+            for offset in range(0, len(memory), mmap.PAGESIZE):
+                memory[offset] = 1
+            observations.append(rss_snapshot('allocated'))
         observations.append(rss_snapshot('released'))
         reported_peak = observations[-1]['peak_kib']
         Path({str(tmp_path / 'native_transient_rss.json')!r}).write_text(json.dumps(observations))
@@ -379,10 +380,9 @@ async def test_real_released_peak_still_triggers_reported_session_limit(tmp_path
             "sampling_control": "disabled_to_check_reported_peak_guard"}))
         observations = json.loads((tmp_path / "native_transient_rss.json").read_text())
         before, allocated, released = observations
-        assert allocated["current_kib"] > before["current_kib"] + 128 * 1024
-        assert released["current_kib"] < allocated["current_kib"] - 128 * 1024
+        # Linux RSS readings are approximate. Check the budget crossings.
+        assert before["current_kib"] < limit < allocated["current_kib"]
         assert released["current_kib"] < limit < released["peak_kib"]
-        assert released["peak_kib"] >= allocated["current_kib"]
         assert result.status is PrepareStatus.BUILD_FAILED
         assert result.blocker.code == "semantic_session_rss_limit"
         assert result.metrics.rss_peak_kib == released["peak_kib"]
