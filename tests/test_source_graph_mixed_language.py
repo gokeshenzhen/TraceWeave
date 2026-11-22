@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-import subprocess
 
 import pytest
 
@@ -16,35 +14,8 @@ from src.source_graph_runtime import IsolatedSourceGraphProcessRunner, PrepareSt
 from src.tb_hierarchy_builder import build_hierarchy
 
 
-ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_PYTHON = ROOT / ".venv" / "bin" / "python"
-
-
-def _require_pinned_frontend() -> None:
-    if not FRONTEND_PYTHON.is_file():
-        pytest.skip("repository Source Graph frontend environment is unavailable")
-    probe = subprocess.run(
-        [
-            str(FRONTEND_PYTHON),
-            "-c",
-            (
-                "import importlib.metadata; import pyslang; "
-                "print(importlib.metadata.version('pyslang'))"
-            ),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if probe.returncode != 0 or probe.stdout.strip() != "11.0.0":
-        pytest.skip("pinned pyslang 11.0.0 frontend is unavailable")
-
-
 @pytest.mark.anyio
-async def test_frontend_error_keeps_mixed_language_positive_facts_usable(tmp_path):
-    _require_pinned_frontend()
+async def test_frontend_error_keeps_mixed_language_positive_facts_usable(tmp_path, source_graph_python):
     sv = tmp_path / "top.sv"
     vhdl = tmp_path / "leaf.vhd"
     compile_log = tmp_path / "sv_compile.log"
@@ -118,7 +89,7 @@ architecture rtl of vhdl_leaf is begin o <= i; end architecture rtl;
     staging = tmp_path / "staging"
     staging.mkdir()
     worker = IsolatedSourceGraphProcessRunner(
-        python_executable=FRONTEND_PYTHON,
+        python_executable=source_graph_python,
         staging_directory=staging,
     )
 

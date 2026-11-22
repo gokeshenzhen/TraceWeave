@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-import subprocess
 import sys
 
 import pytest
@@ -23,7 +22,6 @@ from tests.test_source_graph_runtime import _request
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_PYTHON = ROOT / ".venv/bin/python"
 
 
 def _context_request(label: str = "session"):
@@ -429,44 +427,22 @@ async def test_request_without_semantic_context_keeps_one_shot_route(tmp_path):
     assert runner.active is False
 
 
-def _pinned_frontend_available() -> bool:
-    if not FRONTEND_PYTHON.is_file():
-        return False
-    completed = subprocess.run(
-        [
-            str(FRONTEND_PYTHON),
-            "-c",
-            (
-                "import importlib.metadata; "
-                "print(importlib.metadata.version('pyslang'))"
-            ),
-        ],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return completed.returncode == 0 and completed.stdout.strip() == "11.0.0"
-
-
 @pytest.mark.anyio
-async def test_real_persistent_worker_matches_session_aware_one_shot(tmp_path):
-    if not _pinned_frontend_available():
-        pytest.skip("pinned Source Graph frontend is unavailable")
+async def test_real_persistent_worker_matches_session_aware_one_shot(tmp_path, source_graph_python):
     request = _slang_context_request()
     staging = tmp_path / "persistent"
     one_shot_staging = tmp_path / "one_shot"
     staging.mkdir()
     one_shot_staging.mkdir()
     runner = PersistentSourceGraphProcessRunner(
-        python_executable=FRONTEND_PYTHON,
+        python_executable=source_graph_python,
         working_directory=ROOT,
         staging_directory=staging,
         idle_ttl_seconds=2.0,
         max_rss_kib=768 * 1024,
     )
     one_shot = IsolatedSourceGraphProcessRunner(
-        python_executable=FRONTEND_PYTHON,
+        python_executable=source_graph_python,
         working_directory=ROOT,
         staging_directory=one_shot_staging,
     )

@@ -31,6 +31,17 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
+@pytest.fixture(scope="session")
+def source_graph_python():
+    """Run real Source Graph workers with the pinned frontend installed for pytest."""
+    from src.slang_connectivity_projector import SLANG_FRONTEND_VERSION
+
+    pyslang = pytest.importorskip("pyslang")
+    if pyslang.__version__ != SLANG_FRONTEND_VERSION:
+        pytest.skip(f"requires pyslang=={SLANG_FRONTEND_VERSION}")
+    return sys.executable
+
+
 @pytest.fixture
 def require_fsdb_runtime():
     """Skip real FSDB reads only when optional native prerequisites are absent."""

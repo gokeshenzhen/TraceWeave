@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from src.structural_semantics import ScanLimits, scan_semantic_session
@@ -97,19 +95,16 @@ module top;for(genvar i=0;i<100;i++)begin:g wrap w();end endmodule
 
 
 @pytest.mark.anyio
-async def test_auto_has_no_cold_build_and_deep_is_license_free(tmp_path, monkeypatch):
+async def test_auto_has_no_cold_build_and_deep_is_license_free(tmp_path, monkeypatch, source_graph_python):
     import server
     from src.structural_semantic_runtime import SemanticScanRuntime
     from src.design_identity import DesignIdentityReader
     from tests.test_structural_scan_runtime import context
     log, _, compile_result = context(tmp_path, "module top; wire y; assign y=1'b0; endmodule\n")
-    python = Path(__file__).resolve().parents[1] / ".venv/bin/python"
-    if not python.exists():
-        pytest.skip("isolated Slang interpreter unavailable")
     monkeypatch.setattr(server, "_parse_merged_compile_context", lambda **_: (compile_result, "vcs"))
     monkeypatch.setattr(server, "_semantic_scan_runtime", SemanticScanRuntime())
     monkeypatch.setattr(server, "_design_identity_reader", DesignIdentityReader())
-    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", str(python))
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", source_graph_python)
     args = {"compile_log": str(log), "simulator": "vcs"}
     auto = await server._dispatch("scan_structural_risks", args)
     assert auto.semantic.status == "not_run"

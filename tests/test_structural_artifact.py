@@ -1,6 +1,5 @@
 from dataclasses import replace
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -39,14 +38,11 @@ async def test_incomplete_corrupt_or_oversized_artifact_cannot_publish():
 
 
 @pytest.mark.anyio
-async def test_deep_scan_shares_one_frontend_with_followup_query(tmp_path, monkeypatch):
+async def test_deep_scan_shares_one_frontend_with_followup_query(tmp_path, monkeypatch, source_graph_python):
     import server
     import src.source_graph_production as production
     from src.structural_semantic_runtime import SemanticScanRuntime
     from src.design_identity import DesignIdentityReader
-    python = Path(__file__).resolve().parents[1] / ".venv/bin/python"
-    if not python.exists():
-        pytest.skip("isolated Slang interpreter unavailable")
     source = tmp_path / "top.sv"
     source.write_text("""module leaf(input en, output out);
 assign out = en;
@@ -57,7 +53,7 @@ endmodule
 """)
     log = tmp_path / "build.log"
     log.write_text(f"Command: vcs -sverilog {source} -top top\nParsing design file '{source}'\nTop Level Modules:\n top\n")
-    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", str(python))
+    monkeypatch.setenv("TRACEWEAVE_SOURCE_GRAPH_PYTHON", source_graph_python)
     monkeypatch.setenv("TRACEWEAVE_AUTO_KDB", "0")
     monkeypatch.setenv("TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY", "off")
     monkeypatch.setenv("TRACEWEAVE_CONNECTIVITY_ROUTE", "source_graph")

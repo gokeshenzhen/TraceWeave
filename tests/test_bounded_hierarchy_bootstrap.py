@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-import subprocess
 import threading
 
 import pytest
@@ -26,10 +25,6 @@ from src.connectivity_query import ConnectivityQueryEngine, QueryStatus
 from src.source_graph_adapter import AdapterStatus, build_source_graph_plan
 from src.source_graph_contract import QueryOperation
 from src.source_graph_runtime import IsolatedSourceGraphProcessRunner, PrepareStatus
-
-
-ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_PYTHON = ROOT / ".venv" / "bin" / "python"
 
 
 def _write(path: Path, text: str) -> None:
@@ -93,28 +88,6 @@ def _config(**overrides) -> BoundedBootstrapConfig:
     }
     values.update(overrides)
     return BoundedBootstrapConfig(**values)
-
-
-def _require_pinned_frontend() -> None:
-    if not FRONTEND_PYTHON.is_file():
-        pytest.skip("repository Source Graph frontend environment is unavailable")
-    probe = subprocess.run(
-        [
-            str(FRONTEND_PYTHON),
-            "-c",
-            (
-                "import importlib.metadata; import pyslang; "
-                "print(importlib.metadata.version('pyslang'))"
-            ),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if probe.returncode != 0 or probe.stdout.strip() != "11.0.0":
-        pytest.skip("pinned pyslang 11.0.0 frontend is unavailable")
 
 
 def test_default_bootstrap_budgets_cover_reported_scale_with_headroom(
@@ -790,8 +763,7 @@ def test_bootstrap_does_not_expand_the_simulator_uvm_library(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_bootstrap_uvm_exclusion_keeps_local_positive_fact(tmp_path):
-    _require_pinned_frontend()
+async def test_bootstrap_uvm_exclusion_keeps_local_positive_fact(tmp_path, source_graph_python):
     top = tmp_path / "top.sv"
     _write(
         top,
@@ -825,7 +797,7 @@ async def test_bootstrap_uvm_exclusion_keeps_local_positive_fact(tmp_path):
     staging = tmp_path / "staging"
     staging.mkdir()
     worker = IsolatedSourceGraphProcessRunner(
-        python_executable=FRONTEND_PYTHON,
+        python_executable=source_graph_python,
         staging_directory=staging,
     )
 
