@@ -124,7 +124,7 @@ endmodule
     await checked('analyze_failure_event',dict(**common,failure_event=r['focused_event']))
     r=await checked('recommend_failure_debug_next_steps',common)
     assert r['runtime_protocol_coverage']['coverage_status']=='zero_coverage'
-    r=await checked('explain_signal_driver',dict(**ctx,wave_path=str(fst),signal_path='top.q',time_ps=36))
+    r=await checked('explain_signal_driver',dict(**ctx,wave_path=str(fst),signal_path='top.q'))
     assert r['backend_status']['actual_backend']=='source_graph'
     r=await checked('find_signal_loads',dict(**ctx,wave_path=str(fst),signal_path='top.q'))
     assert r['backend_status']['actual_backend']=='source_graph'
