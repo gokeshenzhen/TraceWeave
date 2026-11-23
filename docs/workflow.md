@@ -558,6 +558,48 @@ analyze_failures(group_index=0) → findings → need more signals?
     └─ Not enough info → analyze_failures(group_index=1) → next error group
 ```
 
+## FSDB report export
+
+When preparing the final report, the local agent exports one nWave signal RC for
+each independent issue with confirmed signal and time evidence in a single FSDB.
+Group repeated reports of the same issue into one view. Choose signals that show
+the observed failure and the upstream or opposite-side behavior actually checked.
+Use function names meaningful to the investigation. The exporter adds a subgroup
+for each full instance path, including distinct instances of the same module.
+
+Run the command supplied in the MCP initialization instructions from the agent's
+current working directory. For example, with a repository checkout:
+
+```bash
+/path/to/TraceWeave/.venv/bin/python /path/to/TraceWeave/scripts/export_verdi_rc.py <<'JSON'
+{
+  "issue": "read_data_mismatch",
+  "fsdb": "/path/to/run/wave.fsdb",
+  "groups": {
+    "Read data": ["tb.u0.data[7:0]", "tb.u1.data[7:0]"],
+    "Acceptance": ["tb.u1.valid", "tb.u1.ready"]
+  },
+  "error_time": "1250ns",
+  "first_deviation": "1210ns"
+}
+JSON
+```
+
+Use exact FSDB declaration paths, including bus ranges. For escaped HDL names,
+supply the literal hierarchy components as a JSON array, such as
+`["tb", "\\lane[0]", "\\net.with.dot"]`. Integer times are picoseconds.
+Unit strings accept fs, ps, ns, us, ms and s down to one femtosecond. Prefer
+the exact `first_divergence_time_fs` with an `fs` suffix when the comparison
+proves the first difference. Omit an unknown time. At least one anchor is
+required. The cursor lands on the reported error when available, and the
+initial view includes all supplied anchors.
+
+The command prints JSON containing the absolute `rc_path` and `fsdb`. Include
+both in the report. Files are saved under `./debug/<issue>_YYYYMMDD_HHMMSS.rc`
+using local generation time. Concurrent exports with the same name receive a
+numeric suffix. If the export fails, report the reason. DV opens the indicated
+FSDB in nWave, then uses **Restore Signal** to load the RC into that window.
+
 ## Notes
 
 ### From a verified difference to its upstream evidence

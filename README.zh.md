@@ -143,6 +143,8 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 > 用 TraceWeave 调查 `/path/to/verif` 下 `my_case` 的仿真失败。检查日志、设计结构和接口握手，再追踪可疑信号。结论请附时间戳、信号路径和源码位置。
 
+使用仓库版的 FSDB 环境时，对于有信号和时间证据的问题，本地 agent 会在报告中附上 Verdi 波形配置文件。在 nWave 中先打开报告指定的 FSDB，再载入 `.rc`，即可按功能和实例查看相关信号，并跳到已确认的报错点和首次偏差处。[导出说明](docs/workflow.md#fsdb-report-export)
+
 调查先定位当前运行产物，扫描结构风险并解析失败日志。助手可以按波形路径查询已知信号，也可以定点检查接口。对于原因不明的超时、挂起或比较失败，可以选择局部或全局握手扫描。未执行 sweep 表示协议行为未检查，不阻塞推荐或其他调查。只有明确请求完整 RTL/TB 层次视图或旧版层次句柄时，才调用 `build_tb_hierarchy`。
 
 结构扫描默认开启（`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`）。如需在默认流程中跳过，

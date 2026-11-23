@@ -145,6 +145,8 @@ Connect your assistant and ask, replacing the path with your project directory:
 
 > Use TraceWeave to investigate the simulation failure in `my_case` under `/path/to/verif`. Check logs, design structure, and interface handshakes, then trace suspicious signals. Include timestamps, signal paths, and source references.
 
+With the repository FSDB installation, the local agent includes a Verdi signal RC for each issue with confirmed signal and time evidence. Open the indicated FSDB in nWave, then restore the RC to see the related signals by function and instance, with the confirmed error and deviation times marked. [FSDB report export](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md#fsdb-report-export)
+
 The investigation discovers current run artifacts, scans structural risks and parses failures. The assistant can inspect a known signal by its waveform path, check a specific interface, or use a handshake sweep for an unexplained timeout or mismatch. An unperformed sweep leaves protocol behavior unchecked and does not block recommendations. Call `build_tb_hierarchy` only when a full RTL/TB view or a legacy hierarchy handle is explicitly requested.
 
 Structural scanning is enabled by default (`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`).
