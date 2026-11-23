@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import tomllib
 
 import config
@@ -19,10 +20,14 @@ def test_distribution_registry_and_runtime_versions_match():
     ]
     registry = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
 
+    version = project["version"]
+    registry_version = f"{version}.0" if re.fullmatch(r"[0-9]+\.[0-9]+", version) else version
+
     assert project["name"] == "traceweave-mcp"
-    assert project["version"] == traceweave_mcp.__version__ == registry["version"]
+    assert traceweave_mcp.__version__ == version
+    assert registry["version"] == registry_version
     assert registry["packages"][0]["identifier"] == project["name"]
-    assert registry["packages"][0]["version"] == project["version"]
+    assert registry["packages"][0]["version"] == version
     assert registry["name"] == REGISTRY_NAME
 
 
