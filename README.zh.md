@@ -77,7 +77,7 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 | 安装方式 | 适用场景 |
 |---|---|
 | 仓库安装 | 在已有 Verdi 环境的仿真主机上使用 FSDB、Source Graph，以及可选的 NPI / LSF |
-| PyPI 安装 | 分析日志、VCD，或使用无需商业 license 的 Source Graph |
+| PyPI 安装 | 分析日志和 VCD，可选 FST 和 Source Graph |
 
 ### 仓库安装
 
@@ -107,7 +107,14 @@ traceweave-mcp --doctor
 
 ### 可选 FST 支持
 
-**仅仓库版可用。** 仓库在 PyPI 2.0.2 发布后才加入 FST 读取器和 `fst` 可选依赖。在 Linux 上，从仓库根目录使用服务端的 Python 环境安装依赖并检查状态。
+在 Linux 上，通过 PyPI 安装时可添加 `fst` 可选依赖并检查读取器。
+
+```bash
+python3.11 -m pip install "traceweave-mcp[fst]>=2.1"
+traceweave-mcp --doctor
+```
+
+使用仓库安装时，在仓库根目录用服务端的 Python 环境运行以下命令。
 
 ```bash
 .venv/bin/python -m pip install "pylibfst==0.2.1"

@@ -1,3 +1,3 @@
 """Installable package facade for the TraceWeave MCP server."""
 
-__version__ = "2.0.2"
+__version__ = "2.1"

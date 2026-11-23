@@ -77,7 +77,7 @@ Requires **Python 3.11+**. Choose the installation that fits your environment:
 | Installation | Intended use |
 |---|---|
 | Repository | Simulation hosts with an existing Verdi installation, for FSDB, Source Graph, and optional NPI / LSF |
-| PyPI | Log and VCD analysis, or Source Graph without a commercial license |
+| PyPI | Log and VCD analysis, with optional FST and Source Graph |
 
 ### Repository Installation
 
@@ -107,7 +107,14 @@ For logs, VCD, and basic static analysis only, install `traceweave-mcp` without 
 
 ### Optional FST support
 
-**Repository installation only.** The FST reader and the `fst` extra were added after PyPI release 2.0.2. On Linux, run these commands from the repository root to install the dependency in the server's Python environment and check its status.
+On Linux, install the `fst` extra in a PyPI environment and check the reader.
+
+```bash
+python3.11 -m pip install "traceweave-mcp[fst]>=2.1"
+traceweave-mcp --doctor
+```
+
+For a repository installation, run these commands from the repository root using the server's Python environment.
 
 ```bash
 .venv/bin/python -m pip install "pylibfst==0.2.1"
