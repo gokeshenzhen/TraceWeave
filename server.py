@@ -18,6 +18,7 @@ import hashlib
 import inspect
 import json
 import re
+import shlex
 import sys
 import os
 import threading
@@ -12243,12 +12244,31 @@ def _prepare_stdio_transport():
     return protocol_stream
 
 
+def _client_initialization_options():
+    options = app.create_initialization_options()
+    exporter = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "export_verdi_rc.py")
+    if os.path.isfile(exporter):
+        options.instructions += f"""
+
+When writing the final debug report, export one Verdi signal RC per independent issue
+with confirmed signals and a time in the selected FSDB. Group repeated occurrences.
+To write under debug/, run the following command from the agent's current working directory.
+{shlex.join([sys.executable, exporter])}
+Send one JSON object on stdin with issue (short name), fsdb (absolute path), groups
+(function name to a list of exact dump paths), error_time and/or first_deviation.
+Select signals that show the symptom and the checked upstream or opposite side.
+Use integer ps or unit strings. Prefer exact fs for a proved first deviation.
+Omit unknown times. Include the returned absolute rc_path and fsdb in the report.
+DV opens that FSDB first and restores the RC. If export fails, report the reason."""
+    return options
+
+
 async def main():
     protocol_stdout = _prepare_stdio_transport()
     try:
         async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
             await app.run(
-                read_stream, write_stream, app.create_initialization_options()
+                read_stream, write_stream, _client_initialization_options()
             )
     finally:
         await protocol_stdout.aclose()

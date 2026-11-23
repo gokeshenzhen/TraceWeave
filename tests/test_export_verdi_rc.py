@@ -1,10 +1,15 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 
+import anyio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 import pytest
 
 from scripts import export_verdi_rc as exporter
@@ -65,6 +70,24 @@ def test_cli_rejects_duplicate_group_without_writing(tmp_path):
     assert proc.returncode != 0 and proc.stdout == ""
     assert "duplicate JSON key" in proc.stderr
     assert not (tmp_path / "debug").exists()
+
+
+@pytest.mark.anyio
+async def test_stdio_client_receives_a_runnable_local_report_command(tmp_path):
+    server = SCRIPT.parents[1] / "server.py"
+    params = StdioServerParameters(command=sys.executable, args=[str(server)], cwd=tmp_path,
+                                   env={**os.environ, "TRACEWEAVE_CACHE_DIR": str(tmp_path / "cache")})
+    with anyio.fail_after(30):
+        async with stdio_client(params) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                instructions = (await session.initialize()).instructions
+                tools = (await session.list_tools()).tools
+    assert all("verdi_rc" not in tool.name for tool in tools)
+    command = next(line for line in instructions.splitlines() if "export_verdi_rc.py" in line)
+    assert shlex.split(command) == [sys.executable, str(SCRIPT)]
+    result = subprocess.run(shlex.split(command) + ["--help"], cwd=tmp_path, text=True,
+                            capture_output=True, check=True)
+    assert "first_deviation" in result.stdout
 
 
 @pytest.mark.eda_integration
