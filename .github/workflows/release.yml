@@ -1,9 +1,9 @@
-name: Release
+name: Finish TraceWeave 2.1.1 release
 
 on:
   push:
     tags:
-      - "v*"
+      - "v2.1.1-publish"
 
 permissions:
   contents: read
@@ -12,64 +12,76 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  TRACEWEAVE_RELEASE_TAG: "v2.1.1"
+  TRACEWEAVE_RELEASE_COMMIT: "e6db90963f31d28c52e497c8a07f31c13847ad81"
+
 jobs:
-  test:
+  verify-ci:
     if: github.repository == 'gokeshenzhen/TraceWeave'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-
+    timeout-minutes: 8
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TRACEWEAVE_CI_RUN: '45147350732'
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install test dependencies
+      - name: Verify CI for the tagged commit
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[test,source-graph,fst]"
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import URLError
+          from urllib.request import Request, urlopen
 
-      - name: Run test suite
-        run: >-
-          python -m pytest tests/ -v
-          --ignore=tests/test_fsdb_parser.py
-          --ignore=tests/test_fsdb_runtime.py
+          repo = os.environ['GITHUB_REPOSITORY']
+          commit = os.environ['TRACEWEAVE_RELEASE_COMMIT']
+          tag = os.environ['TRACEWEAVE_RELEASE_TAG']
+          run_id = os.environ['TRACEWEAVE_CI_RUN']
+          base = f'https://api.github.com/repos/{repo}'
+          headers = {'Accept':'application/vnd.github+json', 'Cache-Control':'no-cache',
+                     'Authorization':f"Bearer {os.environ['GH_TOKEN']}"}
 
-  source-graph-setup:
-    if: github.repository == 'gokeshenzhen/TraceWeave'
-    runs-on: ubuntu-latest
+          def get(path):
+              with urlopen(Request(base + path, headers=headers),timeout=12) as response:
+                  return json.load(response)
 
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install and verify the pinned Source Graph runtime
-        run: |
-          bash scripts/setup_source_graph.sh
-          bash scripts/setup_source_graph.sh --check
+          assert get(f'/commits/{tag}')['sha'] == commit
+          path = f'/actions/runs/{run_id}'
+          expected = {'test (3.11)', 'test (3.12)', 'package (3.11)', 'package (3.12)', 'source-graph-setup'}
+          for attempt in range(30):
+              try:
+                  run = get(path)
+                  assert run['head_sha'] == commit and run['head_branch'] == 'main'
+                  assert run['event'] == 'push' and run['name'] == 'CI'
+                  if run['status'] == 'completed':
+                      assert run['conclusion'] == 'success', run['conclusion']
+                      jobs = get(path + '/jobs?per_page=20&filter=latest')['jobs']
+                      passed = {job['name'] for job in jobs if job['conclusion'] == 'success'}
+                      if expected <= passed:
+                          print(f'CI run {run_id} passed for {commit}.')
+                          break
+              except (URLError, TimeoutError):
+                  if attempt == 29:
+                      raise
+              time.sleep(12)
+          else:
+              raise SystemExit('CI for the tagged commit did not complete successfully.')
+          PY
 
   build:
     if: github.repository == 'gokeshenzhen/TraceWeave'
-    needs: [test, source-graph-setup]
+    needs: verify-ci
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.TRACEWEAVE_RELEASE_COMMIT }}
           persist-credentials: false
 
       - name: Set up Python 3.11
@@ -78,8 +90,6 @@ jobs:
           python-version: "3.11"
 
       - name: Verify tag and release metadata
-        env:
-          TRACEWEAVE_RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import json
@@ -187,6 +197,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.TRACEWEAVE_RELEASE_COMMIT }}
           persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
@@ -248,6 +259,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.TRACEWEAVE_RELEASE_COMMIT }}
           persist-credentials: false
 
       - name: Set up Python 3.11
@@ -298,7 +310,7 @@ jobs:
       - name: Clean-install and smoke-test the public wheel
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TRACEWEAVE_RELEASE_TAG#v}"
           python -m venv "$RUNNER_TEMP/traceweave-public"
           "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install \
@@ -325,6 +337,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.TRACEWEAVE_RELEASE_COMMIT }}
           persist-credentials: false
 
       - name: Install the pinned current mcp-publisher
@@ -355,6 +368,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.TRACEWEAVE_RELEASE_COMMIT }}
           persist-credentials: false
 
       - name: Set up Python 3.11
@@ -443,8 +457,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME" dist/*
+          gh release create "$TRACEWEAVE_RELEASE_TAG" dist/*
           --repo "$GITHUB_REPOSITORY"
           --verify-tag
-          --title "TraceWeave ${GITHUB_REF_NAME#v}"
+          --title "TraceWeave ${TRACEWEAVE_RELEASE_TAG#v}"
           --generate-notes
