@@ -567,6 +567,12 @@ the observed failure and the upstream or opposite-side behavior actually checked
 Use function names meaningful to the investigation. The exporter adds a subgroup
 for each full instance path, including distinct instances of the same module.
 
+Export is enabled by default. To disable it, set `TRACEWEAVE_VERDI_RC_EXPORT=0`
+in the MCP server environment and reconnect. The local command also honors this
+setting in the agent's shell and returns `{"status":"disabled","reason":"TRACEWEAVE_VERDI_RC_EXPORT=0"}`
+before reading a manifest or creating `debug/`. Unset the variable or set it to
+`1` to enable export again.
+
 Run the command supplied in the MCP initialization instructions from the agent's
 current working directory. For example, with a repository checkout:
 

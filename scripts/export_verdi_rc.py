@@ -14,6 +14,7 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from config import VERDI_RC_EXPORT
 from src.fsdb_parser import FSDBParser
 from src.scope_metadata import file_identity
 from src.verdi_rc import render_verdi_rc
@@ -26,6 +27,9 @@ EXAMPLE = """Example JSON (stdin by default, or pass a JSON file):
 Times are integer picoseconds or unit strings (fs, ps, ns, us, ms, s).
 Omit an unknown time. Use exact dump declarations; for escaped HDL names
 give a signal as a JSON list of literal hierarchy components."""
+
+
+DISABLED = {"status": "disabled", "reason": "TRACEWEAVE_VERDI_RC_EXPORT=0"}
 
 
 def _unique_keys(pairs):
@@ -69,6 +73,8 @@ def _publish(directory: Path, stem: str, view: str) -> Path:
 
 
 def export_issue(spec: dict) -> dict:
+    if not VERDI_RC_EXPORT:
+        return DISABLED.copy()
     if not isinstance(spec, dict):
         raise ValueError("expected one JSON object per issue")
     unknown = spec.keys() - {"issue", "fsdb", "groups", "error_time", "first_deviation"}
@@ -105,6 +111,9 @@ def main() -> int:
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     cli.add_argument("manifest", nargs="?", default="-", help="JSON file, or - for stdin")
     args = cli.parse_args()
+    if not VERDI_RC_EXPORT:
+        print(json.dumps(DISABLED))
+        return 0
     # The FFR runtime also writes to fd 1 at process exit. Reserve the original
     # stdout for the machine-readable receipt for the lifetime of this CLI process.
     with os.fdopen(os.dup(1), "w", encoding="utf-8") as output:

@@ -17,6 +17,13 @@ from scripts import export_verdi_rc as exporter
 
 SCRIPT = Path(exporter.__file__).resolve()
 FIXTURES = Path(__file__).parent / "fixtures"
+FLAG = "TRACEWEAVE_VERDI_RC_EXPORT"
+
+
+@pytest.fixture(autouse=True)
+def default_export_environment(monkeypatch):
+    monkeypatch.delenv(FLAG, raising=False)
+    monkeypatch.setattr(exporter, "VERDI_RC_EXPORT", True)
 
 
 def test_concurrent_publication_preserves_every_view(tmp_path):
@@ -72,17 +79,39 @@ def test_cli_rejects_duplicate_group_without_writing(tmp_path):
     assert not (tmp_path / "debug").exists()
 
 
+@pytest.mark.parametrize("value", ["0", "OFF", "false", "no"])
+def test_disabled_cli_skips_before_reading_or_writing(tmp_path, value):
+    result = subprocess.run([sys.executable, str(SCRIPT), "missing.json"], cwd=tmp_path,
+                            env={**os.environ, FLAG: value}, capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == {"status": "disabled", "reason": FLAG + "=0"}
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_disabled_export_skips_even_an_unavailable_fsdb(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(exporter, "VERDI_RC_EXPORT", False)
+    assert exporter.export_issue({"fsdb": "missing.fsdb"})["status"] == "disabled"
+    assert not (tmp_path / "debug").exists()
+
+
 @pytest.mark.anyio
-async def test_stdio_client_receives_a_runnable_local_report_command(tmp_path):
+@pytest.mark.parametrize("value", [None, "1", "0"])
+async def test_stdio_client_receives_the_configured_export_policy(tmp_path, value):
     server = SCRIPT.parents[1] / "server.py"
-    params = StdioServerParameters(command=sys.executable, args=[str(server)], cwd=tmp_path,
-                                   env={**os.environ, "TRACEWEAVE_CACHE_DIR": str(tmp_path / "cache")})
+    env = {**os.environ, "TRACEWEAVE_CACHE_DIR": str(tmp_path / "cache")}
+    if value is not None:
+        env[FLAG] = value
+    params = StdioServerParameters(command=sys.executable, args=[str(server)], cwd=tmp_path, env=env)
     with anyio.fail_after(30):
         async with stdio_client(params) as (reader, writer):
             async with ClientSession(reader, writer) as session:
                 instructions = (await session.initialize()).instructions
                 tools = (await session.list_tools()).tools
     assert all("verdi_rc" not in tool.name for tool in tools)
+    if value == "0":
+        assert "export_verdi_rc.py" not in instructions
+        assert FLAG + "=0" in instructions
+        return
     command = next(line for line in instructions.splitlines() if "export_verdi_rc.py" in line)
     assert shlex.split(command) == [sys.executable, str(SCRIPT)]
     result = subprocess.run(shlex.split(command) + ["--help"], cwd=tmp_path, text=True,

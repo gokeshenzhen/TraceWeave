@@ -201,6 +201,7 @@ AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
 STRUCTURAL_SCAN_IN_WORKFLOW = _env_flag(
     "TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW", True
 )
+VERDI_RC_EXPORT = _env_flag("TRACEWEAVE_VERDI_RC_EXPORT", True)
 
 # A Verdi elaborated KDB can retain a useful partial netlist even when
 # elabcom recorded errors (for example unresolved VHDL or encrypted cells).

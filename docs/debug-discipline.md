@@ -75,7 +75,7 @@ general form you can hand to any agent on any module.
 > **Final report** — keep it short and include:
 > - observed failure
 > - waveform/log evidence (with time, signal path, key values, log line numbers)
-> - for each independent issue with FSDB signal and time evidence, the absolute paths of the FSDB and its [Verdi signal RC](workflow.md#fsdb-report-export)
+> - when RC export is enabled, the absolute paths of the FSDB and its [Verdi signal RC](workflow.md#fsdb-report-export) for each independent issue with FSDB signal and time evidence
 > - suspected root cause
 > - suspected source module/file/function (only if the evidence supports it)
 > - confidence level

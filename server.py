@@ -59,6 +59,7 @@ from config import (
     MAX_WAVE_WINDOW_CYCLES,
     SIGNAL_SEARCH_MAX_KEYWORDS,
     STRUCTURAL_SCAN_IN_WORKFLOW,
+    VERDI_RC_EXPORT,
     TRANSITIONS_MAX_RETURNED,
     DEFAULT_MAX_GROUPS,
     DEFAULT_WAVE_WINDOW_PS,
@@ -12247,7 +12248,9 @@ def _prepare_stdio_transport():
 def _client_initialization_options():
     options = app.create_initialization_options()
     exporter = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "export_verdi_rc.py")
-    if os.path.isfile(exporter):
+    if not VERDI_RC_EXPORT:
+        options.instructions += "\n\nTRACEWEAVE_VERDI_RC_EXPORT=0 disables Verdi RC export. Skip this report attachment."
+    elif os.path.isfile(exporter):
         options.instructions += f"""
 
 When writing the final debug report, export one Verdi signal RC per independent issue
@@ -12259,6 +12262,7 @@ Send one JSON object on stdin with issue (short name), fsdb (absolute path), gro
 Select signals that show the symptom and the checked upstream or opposite side.
 Use integer ps or unit strings. Prefer exact fs for a proved first deviation.
 Omit unknown times. Include the returned absolute rc_path and fsdb in the report.
+If the local command returns status=disabled, skip the attachment.
 DV opens that FSDB first and restores the RC. If export fails, report the reason."""
     return options
 
