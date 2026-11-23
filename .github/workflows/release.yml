@@ -301,9 +301,18 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           python -m venv "$RUNNER_TEMP/traceweave-public"
           "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install --upgrade pip
-          "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install \
-            --no-cache-dir --index-url https://pypi.org/simple --retries 12 \
-            "traceweave-mcp==$VERSION"
+          # The Simple API used by pip can lag behind the release JSON.
+          for attempt in {1..12}; do
+            if "$RUNNER_TEMP/traceweave-public/bin/python" -m pip install \
+              --no-cache-dir --index-url https://pypi.org/simple --retries 12 \
+              "traceweave-mcp==$VERSION"; then
+              break
+            fi
+            if [[ "$attempt" == 12 ]]; then
+              exit 1
+            fi
+            sleep 10
+          done
           cd "$RUNNER_TEMP"
           timeout 30 "$RUNNER_TEMP/traceweave-public/bin/python" \
             "$GITHUB_WORKSPACE/tests/installed_stdio_smoke.py"
