@@ -1,9 +1,9 @@
-name: Release
+name: PyPI Release
 
 on:
   push:
     tags:
-      - "v*"
+      - "v2.1"
 
 permissions:
   contents: read
@@ -35,7 +35,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[test,source-graph]"
+          python -m pip install -e ".[test,source-graph,fst]"
 
       - name: Run test suite
         run: >-
@@ -217,6 +217,17 @@ jobs:
           timeout 30 "$RUNNER_TEMP/traceweave-clean/bin/python" \
             "$GITHUB_WORKSPACE/tests/installed_source_graph_smoke.py"
 
+      - name: Smoke-test the installed FST extra
+        shell: bash
+        run: |
+          wheels=(dist/*.whl)
+          "$RUNNER_TEMP/traceweave-clean/bin/python" -m pip install \
+            "${wheels[0]}[fst,source-graph]"
+          cd "$RUNNER_TEMP"
+          timeout 180 "$RUNNER_TEMP/traceweave-clean/bin/python" \
+            "$GITHUB_WORKSPACE/scripts/check_fst_readback.py" --installed \
+            --output "$RUNNER_TEMP/fst-readback.json"
+
   publish-pypi:
     if: github.repository == 'gokeshenzhen/TraceWeave'
     needs: package-smoke
@@ -304,143 +315,3 @@ jobs:
           cd "$RUNNER_TEMP"
           timeout 30 "$RUNNER_TEMP/traceweave-public/bin/python" \
             "$GITHUB_WORKSPACE/tests/installed_stdio_smoke.py"
-
-  publish-registry:
-    if: github.repository == 'gokeshenzhen/TraceWeave'
-    needs: verify-pypi
-    runs-on: ubuntu-latest
-    environment:
-      name: mcp-registry
-      url: https://registry.modelcontextprotocol.io
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      MCP_PUBLISHER_VERSION: "1.8.1"
-      MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Install the pinned current mcp-publisher
-        shell: bash
-        run: |
-          archive="$RUNNER_TEMP/mcp-publisher_linux_amd64.tar.gz"
-          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            --output "$archive" \
-            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
-          printf '%s  %s\n' "$MCP_PUBLISHER_SHA256" "$archive" | sha256sum --check --strict
-          tar -xzf "$archive" -C "$RUNNER_TEMP" mcp-publisher
-          "$RUNNER_TEMP/mcp-publisher" --version
-
-      - name: Validate Registry metadata
-        run: '"$RUNNER_TEMP/mcp-publisher" validate server.json'
-
-      - name: Authenticate with GitHub Actions OIDC
-        run: '"$RUNNER_TEMP/mcp-publisher" login github-oidc'
-
-      - name: Publish to the Official MCP Registry
-        run: '"$RUNNER_TEMP/mcp-publisher" publish server.json'
-
-  verify-registry:
-    if: github.repository == 'gokeshenzhen/TraceWeave'
-    needs: publish-registry
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Query exact latest and search endpoints
-        run: |
-          curl --fail --silent --show-error --location \
-            --retry 30 --retry-all-errors --retry-delay 10 \
-            'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.gokeshenzhen%2Ftraceweave/versions/latest' \
-            --output registry-latest.json
-          curl --fail --silent --show-error --location \
-            --retry 30 --retry-all-errors --retry-delay 10 \
-            'https://registry.modelcontextprotocol.io/v0.1/servers?search=traceweave&version=latest' \
-            --output registry-search.json
-
-      - name: Verify Registry response metadata
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          import tomllib
-
-          root = Path.cwd()
-          version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-          expected_name = "io.github.gokeshenzhen/traceweave"
-          expected_package = "traceweave-mcp"
-          expected_repository = "https://github.com/gokeshenzhen/TraceWeave"
-
-          latest = json.loads((root / "registry-latest.json").read_text(encoding="utf-8"))
-          server = latest["server"]
-          packages = server["packages"]
-          assert server["name"] == expected_name
-          assert server["version"] == version
-          assert server["repository"]["url"] == expected_repository
-          assert any(
-              package["registryType"] == "pypi"
-              and package["identifier"] == expected_package
-              and package["version"] == version
-              and package["transport"]["type"] == "stdio"
-              for package in packages
-          )
-
-          search = json.loads((root / "registry-search.json").read_text(encoding="utf-8"))
-          matches = [
-              item["server"]
-              for item in search["servers"]
-              if item.get("server", {}).get("name") == expected_name
-          ]
-          assert any(match["version"] == version for match in matches)
-          print(json.dumps({
-              "name": server["name"],
-              "version": server["version"],
-              "package": expected_package,
-              "repository": server["repository"]["url"],
-              "search_matches": len(matches),
-          }, indent=2))
-          PY
-
-      - name: Store Registry verification responses
-        uses: actions/upload-artifact@v5
-        with:
-          name: registry-verification
-          path: registry-*.json
-          if-no-files-found: error
-          retention-days: 30
-
-  github-release:
-    if: github.repository == 'gokeshenzhen/TraceWeave'
-    needs: verify-registry
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download distributions
-        uses: actions/download-artifact@v6
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME" dist/*
-          --repo "$GITHUB_REPOSITORY"
-          --verify-tag
-          --title "TraceWeave ${GITHUB_REF_NAME#v}"
-          --generate-notes
