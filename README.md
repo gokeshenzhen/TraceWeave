@@ -26,9 +26,6 @@ TraceWeave is an MCP server for RTL / SoC debugging. It connects compile records
 
 Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the problem in natural language; the assistant uses tools to investigate, trace, and verify, with evidence you can review.
 
-**HWE-Bench repair pass rate rose from 78.33% to 88.75%, a gain of 10.42 percentage points.**
-In our paired evaluation of 240 tasks across six open-source hardware projects, the group with TraceWeave passed **25 more tasks overall**. [See results by project](#hwe-bench-results)
-
 [Use Cases](#use-cases) · [Installation](#installation) · [Client Setup](#client-setup) · [Start Debugging](#start-debugging) · [Tool Quick Reference](#tool-quick-reference) · [FAQ](#faq) · [Documentation and Feedback](#documentation-and-feedback)
 
 <p align="center">
@@ -50,25 +47,6 @@ In our paired evaluation of 240 tasks across six open-source hardware projects, 
 Supports VCS / Xcelium / Verilator simulation logs and VCD / FSDB / FST waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
 
 Trace signals from the waveform back to their driving logic with **Verdi NPI → Source Graph → basic static analysis**, according to available tools and query coverage. Source Graph provides semantic source analysis without a commercial license. Results retain source references, coverage gaps, and next steps so you can check the evidence before assigning a root cause.
-
-## HWE-Bench Results
-
-<details>
-<summary>Pass counts by project</summary>
-
-| Project | Tasks | Without TraceWeave | With TraceWeave | Gain (percentage points) | Net extra passes |
-|---|---:|---:|---:|---:|---:|
-| OpenTitan | 141 | 106/141 (75.18%) | 124/141 (87.94%) | +12.77 | +18 |
-| XiangShan | 20 | 15/20 (75.00%) | 17/20 (85.00%) | +10.00 | +2 |
-| Rocket Chip | 13 | 10/13 (76.92%) | 11/13 (84.62%) | +7.69 | +1 |
-| Ibex | 26 | 24/26 (92.31%) | 25/26 (96.15%) | +3.85 | +1 |
-| CVA6 | 27 | 22/27 (81.48%) | 24/27 (88.89%) | +7.41 | +2 |
-| Caliptra RTL | 13 | 11/13 (84.62%) | 12/13 (92.31%) | +7.69 | +1 |
-| **Total** | **240** | **188/240 (78.33%)** | **213/240 (88.75%)** | **+10.42** | **+25** |
-
-The table summarizes TraceWeave's evaluation of 240 cases. Both groups could run simulations and write their own diagnostic scripts. HWE-Bench tests scored the final patches. [HWE-Bench scoring protocol](https://arxiv.org/html/2604.14709v3#S4.SS1)
-
-</details>
 
 ## Installation
 

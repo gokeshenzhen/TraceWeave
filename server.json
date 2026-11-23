@@ -3,7 +3,7 @@
   "name": "io.github.gokeshenzhen/traceweave",
   "title": "TraceWeave",
   "description": "Portable MCP runtime for RTL logs and VCD; repository setup adds FSDB and site EDA integration",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "websiteUrl": "https://github.com/gokeshenzhen/TraceWeave",
   "repository": {
     "url": "https://github.com/gokeshenzhen/TraceWeave",
@@ -14,7 +14,7 @@
     {
       "registryType": "pypi",
       "identifier": "traceweave-mcp",
-      "version": "2.1",
+      "version": "2.1.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
