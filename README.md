@@ -121,7 +121,7 @@ For a repository installation, run these commands from the repository root using
 .venv/bin/python -m traceweave_mcp --doctor
 ```
 
-Reconnect the MCP server and open a small `.fst` file with `get_waveform_summary`. The returned `fst_backend.version` identifies the loaded reader version. See [FST support and limits](docs/architecture.md#fst-basic-reading).
+Reconnect the MCP server and open a small `.fst` file with `get_waveform_summary`. The returned `fst_backend.version` identifies the loaded reader version. See [FST support and limits](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#fst-basic-reading).
 
 ## Client Setup
 
@@ -183,7 +183,7 @@ and otherwise reuses compatible source results; `deep` also permits a Slang buil
 The category list replaces the defaults. Facts report static writers and proved
 empty inventories for consumed bits; runtime contention is not checked. Read
 coverage and gaps before interpreting zero findings. See the
-[driver checks reference](docs/architecture.md#bit-level-driver-checks) for limits.
+[driver checks reference](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#bit-level-driver-checks) for limits.
 
 Try a more focused question:
 
@@ -193,13 +193,13 @@ Try a more focused question:
 - **Check source structure:** “Use deep mode to scan this compile log's design for suspicious ties, open inputs, and constant comparisons.”
 - **Verify a hypothesis:** “Sample these signals before each clock edge and check whether the payload stays stable while waiting for ready.”
 
-You can also evaluate [SV expressions](docs/expressions.md), inspect packed bus fields, and compare failures after a fix. Coverage limits remain visible: zero findings from an incomplete check do not establish that the design is correct.
+You can also evaluate [SV expressions](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/expressions.md), inspect packed bus fields, and compare failures after a fix. Coverage limits remain visible: zero findings from an incomplete check do not establish that the design is correct.
 
-For a connection check, ask the assistant to call `get_sim_paths`. See the [debug workflow](docs/workflow.md) for the full procedure and the [readback check](docs/architecture.md#readback-client-check) for a repository smoke check.
+For a connection check, ask the assistant to call `get_sim_paths`. See the [debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) for the full procedure and the [readback check](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#readback-client-check) for a repository smoke check.
 
 ### Custom runtime logs
 
-Built-in parsing covers UVM, VCS/Xcelium assertions, and supported Verilator/cocotb failures. Add project-specific checker labels through [custom_patterns.yaml](custom_patterns.yaml), or set `TRACEWEAVE_CUSTOM_PATTERNS_FILE` to your own file. See [log formats and configuration](docs/architecture.md#runtime-log-formats) for examples and Verilator time-unit requirements.
+Built-in parsing covers UVM, VCS/Xcelium assertions, and supported Verilator/cocotb failures. Add project-specific checker labels through [custom_patterns.yaml](https://github.com/gokeshenzhen/TraceWeave/blob/main/custom_patterns.yaml), or set `TRACEWEAVE_CUSTOM_PATTERNS_FILE` to your own file. See [log formats and configuration](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#runtime-log-formats) for examples and Verilator time-unit requirements.
 
 ## Tool Quick Reference
 
@@ -260,7 +260,7 @@ formal proof or an LLM. Supply `compile_log` or `design_handle` for compiled sou
 targets; select one declaration/directive with `target`, `instance_path` or `line`.
 Read each item's completeness and gaps. Unassociated text has an unknown run mode;
 an exact `run_anchor` links an existing simulation/formal discovery. See
-[property explanations](docs/architecture.md#property-explanations) for examples,
+[property explanations](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#property-explanations) for examples,
 the optional frontend requirement and limits.
 
 For a logged assertion, request `include_check_plan=true` and pass its
@@ -313,7 +313,7 @@ Log analysis, VCD, optional FST, lexical structural checks, and Slang / Source G
 
 No. Supply a compile/elaboration log. Text checks use accessible sources; `auto` also tries existing/cached KDBs for NPI input-port checks, then only reuses compatible source semantic results for missing categories. `deep` additionally permits a bounded Slang build. Scans never build a KDB. Supply `top_hint` if compile metadata lacks a unique top.
 
-Read `semantic.category_coverage` and `result_groups`: NPI port facts and source facts retain separate domains and identities. Default comparison checks still need source evidence; unknown expressions, empty-actual default semantics and budget stops remain gaps. Zero facts or a cache hit does not prove completeness. Findings can include legitimate tie-offs. See [scan modes and limits](docs/architecture.md#structural-scan-invocation).
+Read `semantic.category_coverage` and `result_groups`: NPI port facts and source facts retain separate domains and identities. Default comparison checks still need source evidence; unknown expressions, empty-actual default semantics and budget stops remain gaps. Zero facts or a cache hit does not prove completeness. Findings can include legitimate tie-offs. See [scan modes and limits](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#structural-scan-invocation).
 
 For large designs, follow `semantic.suggested_next_action` or pass the returned
 `semantic.continuation` as `semantic_continuation` with the same log/top/scope/categories.
@@ -336,11 +336,11 @@ File parsing and EDA queries run locally or on configured LSF nodes. Returned ev
 | Debugging steps and tool cooperation | [Debug workflow](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md) |
 | Verifying a root cause with evidence | [Debug discipline](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/debug-discipline.md) |
 | Architecture, backend capabilities, and resource limits | [Architecture](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md) |
-| Expression inputs and worked examples | [SV expressions](docs/expressions.md) |
+| Expression inputs and worked examples | [SV expressions](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/expressions.md) |
 | Complete environment configuration and advanced settings | [Configuration reference](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/architecture.md#client-configuration-reference) |
 | Reporting a problem or suggesting a feature | [GitHub Issues](https://github.com/gokeshenzhen/TraceWeave/issues) |
 
-Before contributing, read [AGENTS.md](AGENTS.md). Repository regression profiles
+Before contributing, read [AGENTS.md](https://github.com/gokeshenzhen/TraceWeave/blob/main/AGENTS.md). Repository regression profiles
 require the `test`, `source-graph` and `fst` Python extras, plus a C++ compiler
 (`g++`). For a new development environment, install the declared extras with
 `python3.11 -m pip install -e ".[test,source-graph,fst]"`. The test runner never
@@ -394,7 +394,7 @@ Remove only your own result/cache directories when finished.
 
 External UART/OpenTitan acceptance is separately opt-in with
 `--external-representative /path/to/manifest.json`. Copy the format in
-[representative.json](tests/fixtures/six_tool_hierarchy/representative.json), supply
+[representative.json](https://github.com/gokeshenzhen/TraceWeave/blob/main/tests/fixtures/six_tool_hierarchy/representative.json), supply
 an explicit project revision, top/scope/source locations and SHA-256 identities
 for the compile log, definition and instance-site files. This specialized check
 expects preserved blocking diagnostics/partial coverage; default profiles instead
