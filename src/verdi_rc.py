@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from fractions import Fraction
+from functools import cache
 import re
 
 
@@ -75,14 +76,40 @@ def _label(text: str) -> str:
     return '"' + text.replace('"', r'\"') + '"'
 
 
+def _signal_row(signal, declaration):
+    is_slice = isinstance(signal, dict)
+    if is_slice and signal.keys() != {"path", "slice"}:
+        raise ValueError("a slice requires an exact declaration path and slice [left, right]")
+    parts = _signal_parts(signal["path"] if is_slice else signal)
+    path = ".".join(parts)
+    metadata = declaration(path)
+    components = [_rc_component(part) for part in parts]
+    if is_slice:
+        bounds = signal["slice"]
+        if not isinstance(bounds, list) or len(bounds) != 2 or any(type(n) is not int for n in bounds):
+            raise ValueError("slice must be two integer indices [left, right]")
+        left, right = bounds
+        declared = metadata["declared_range"]
+        first, last = declared["left"], declared["right"]
+        if min(bounds) < min(first, last) or max(bounds) > max(first, last):
+            raise ValueError(f"slice {bounds} is outside {path}")
+        if left != right and (left < right) != (first < last):
+            raise ValueError(f"slice {bounds} reverses the declared direction of {path}")
+        # An escaped identifier ends in a space. Only a following range is syntax.
+        leaf = re.sub(r"\[-?\d+(?::-?\d+)?\]$", "", components[-1])
+        components[-1] = leaf + (f"[{left}]" if left == right else f"[{left}:{right}]")
+    scope = "/".join(components[:-1]).rstrip() or "/"
+    return scope, "/" + "/".join(components)
+
+
 def render_verdi_rc(groups: dict, *, error_time=None, first_deviation=None,
                     duration_ps: int, check_signal: Callable[[str], object]) -> str:
-    """Keep evidence order and require an exact declaration in the selected dump."""
+    """Keep evidence order and validate each row against its exact dump declaration."""
     lines = ["Magic 271485", "Revision Verdi_V-2023.12-SP2", ""]
     lines.extend(_time_lines(error_time, first_deviation, duration_ps))
     if not isinstance(groups, dict) or not groups:
         raise ValueError("groups must map function names to non-empty lists of signals")
-    checked = set()
+    declaration = cache(check_signal)
     for function, signals in groups.items():
         if not isinstance(function, str) or not function.strip() or not function.isprintable():
             raise ValueError("each function group needs a printable name")
@@ -90,15 +117,9 @@ def render_verdi_rc(groups: dict, *, error_time=None, first_deviation=None,
             raise ValueError(f"function group {function!r} needs a non-empty list of signals")
         scopes = {}
         for signal in signals:
-            parts = _signal_parts(signal)
-            path = ".".join(parts)
-            if path not in checked:
-                check_signal(path)
-                checked.add(path)
-            components = [_rc_component(part) for part in parts]
-            scope = "/".join(components[:-1]).rstrip() or "/"
+            scope, path = _signal_row(signal, declaration)
             # Preserve order, including when the same signal participates in another function.
-            scopes.setdefault(scope, {})["/" + "/".join(components)] = None
+            scopes.setdefault(scope, {})[path] = None
 
         lines.extend(["", f"addGroup {_label(function)}"])
         for scope, paths in scopes.items():

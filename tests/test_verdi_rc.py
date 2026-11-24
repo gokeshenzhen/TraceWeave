@@ -83,3 +83,32 @@ def test_unresolved_declaration_stops_export():
     with pytest.raises(KeyError, match="tb.missing"):
         render_verdi_rc({"Compare": ["tb.missing"]}, error_time=1, duration_ps=2,
                         check_signal={}.__getitem__)
+
+
+def test_slices_use_declared_coordinates_and_check_each_parent_once():
+    checked = []
+    def declaration(path):
+        checked.append(path)
+        left, right = (31, 0) if path.endswith("data[31:0]") else (1, 32)
+        return {"declared_range": {"left": left, "right": right}}
+
+    asc, desc = "tb.u.S[1:32]", "tb.u.data[31:0]"
+    view = render_verdi_rc({"Port map": [
+        {"path": asc, "slice": [6, 9]}, {"path": asc, "slice": [5, 8]},
+        {"path": asc, "slice": [9, 9]}, {"path": desc, "slice": [7, 4]},
+        {"path": ["tb", r"\literal[7]"], "slice": [3, 4]},
+    ]}, error_time=0, duration_ps=1, check_signal=declaration)
+    assert checked == [asc, desc, r"tb.\literal[7]"]
+    assert [row for row in view.splitlines() if row.startswith("addSignal")] == [
+        "addSignal -h 15 /tb/u/S[6:9]", "addSignal -h 15 /tb/u/S[5:8]",
+        "addSignal -h 15 /tb/u/S[9]", "addSignal -h 15 /tb/u/data[7:4]",
+        r"addSignal -h 15 /tb/\literal[7] [3:4]",
+    ]
+
+
+@pytest.mark.parametrize("bounds", [[0, 4], [3, 33], [9, 6], [True, 1], [4], "6:9"])
+def test_invalid_slice_cannot_be_rendered_as_the_whole_bus(bounds):
+    with pytest.raises(ValueError, match="slice"):
+        render_verdi_rc({"G": [{"path": "tb.S[1:32]", "slice": bounds}]},
+                        error_time=0, duration_ps=1,
+                        check_signal=lambda path: {"declared_range": {"left": 1, "right": 32}})
