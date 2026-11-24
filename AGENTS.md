@@ -60,7 +60,9 @@ separate evidence identities.
 
 Rules:
 
-- Pass `compile_log` (or `kdb_path` + `top_hint`) to native-first queries. Healthy NPI needs no full source capture/validation; permitted fallback prepares source server-side and returns `source_design_handle`. Explicit `design_handle` keeps strict validation; changed/expired observations require explicit preparation. When scanning, explicit `build_tb_hierarchy` runs alongside the same scan.
+- Query dumped signals directly using their waveform paths. Before opening an RTL/TB file named in a log, verify its compiled path with `lookup_tb_files(compile_log=..., basename=...)`. Name and path filters read compile metadata.
+- For connectivity and scoped hierarchy queries, pass `compile_log` or `kdb_path` + `top_hint` directly. Healthy NPI needs no full source capture. Permitted fallback prepares source server-side and returns `source_design_handle`. Explicit `design_handle` keeps strict validation. Changed or expired source observations require explicit preparation.
+- Call `build_tb_hierarchy` only for an explicitly requested full RTL/TB view or legacy hierarchy handle. If the same compile log also needs a structural scan, run both in parallel.
 - `scan_structural_risks` is enabled in the default workflow. The user may skip it
   explicitly or set `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0` in the MCP server
   environment and reconnect. With this setting, do not automatically call or
@@ -70,7 +72,7 @@ Rules:
 - Read `lexical_coverage_status`, `semantic.status/gaps` and `semantic.propagation` separately. `semantic_scope` selects basic semantic facts; frontend elaboration may still span the compile context. Explicit `propagated_constant` / `constant_control` categories require a bounded full writer inventory even for scoped output. Missing drivers, sequential/initial state and conflicting or unmodeled writes cannot become permanent ties. Facts are investigation evidence, not confirmed defects; display truncation is distinct from analysis limits.
 - Explicit `multiple_driver` / `undriven_signal` categories use NPI or Slang bit-level static inventories; defaults stay unchanged. Multiple known sources are positive evidence, not runtime contention. Undriven facts require a complete empty inventory for consumed bits; unknown/limited inventories never prove absence. Slang inventories all elaborated tops even for scoped output. Read `target_bits`, `driver_inventory_complete`, category coverage and gaps; native continuation also preserves signal/bit positions.
 - For bounded native scans, inspect `result_groups[].gap_summary` and `scan_progress`. Continue pending work with `semantic.suggested_next_action` / `semantic_continuation`, preserving log/top/scope/categories; do not restart the same prefix. Counts are cumulative, facts belong to the current page. Tokens expire after 10 idle minutes or server restart. Frontier completion does not clear unsupported-expression/category gaps; if continuation is blocked, report the reason and choose a relevant smaller scope rather than looping.
-- Structural scans cache exact source/context results before output trimming. Scoped deep scans may publish compatible compact IR for Source Graph queries through the normal identity/scope/capability checks; `semantic.query_artifact_status` reports reuse or bypass. The default parallel hierarchy/scan workflow never waits for a hierarchy or forces full-design IR. NPI retains its KDB and priority; scan/Source Graph facts do not become NPI facts. See `README.zh.md` and `docs/architecture.md` for per-call examples and budgets.
+- Structural scans cache exact source/context results before output trimming. Scoped deep scans may publish compatible compact IR for Source Graph queries through the normal identity/scope/capability checks; `semantic.query_artifact_status` reports reuse or bypass. A scan runs independently of the full hierarchy and does not force full-design IR. NPI retains its KDB and priority; scan/Source Graph facts do not become NPI facts. See `README.zh.md` and `docs/architecture.md` for per-call examples and budgets.
 - `sweep_handshakes` is optional: consider it for timeout/hang or compare symptoms when the responsible interface is unknown. Use a known module scope/time window, or inspect a known interface/signal directly. An unperformed sweep means unchecked, and never blocks other investigation. It returns AHB and valid/ready facts, not a verdict. Always inspect `coverage_status`: `zero_coverage` checked nothing; `truncated`/`degraded` is partial, so `flagged_count=0` is not clean. Retry only a `suggested_next_action` that changes scope/window/edge/interface cap; otherwise report the missing prerequisite instead of replaying the same call. Use `finding_summary` before opening all rows. Never collapse global findings plus a clean targeted interface into “protocol clean”; state both. Any `transition_data_truncated` row forces non-complete coverage; narrow the time window and never treat prefix zero counts as clean.
 - Do not analyze or recommend fixes before MCP output is available
 - On protocol or scoreboard mismatches, carry at least two competing hypotheses and verify the opposite side with waveform evidence before assigning root cause; state which sides were checked. See `docs/workflow.md`.
@@ -210,9 +212,9 @@ workflow and evidence interpretation live in `docs/workflow.md` and
   fixed reasons, fingerprints, coverage and effective timeout. Source association
   is separate from KDB identity. Cancellation never advances fallback.
 - Source Graph uses isolated workers, bounded compact IR, one-build admission and
-  exact-key single-flight. Changed/incomplete compile snapshots require rebuilding
-  the hierarchy. An incomplete key shares only its live flight, with at most one
-  consumed-once 60s/512MiB exact handoff: never cache it or broaden its scope.
+  exact-key single-flight. Rebuild a legacy hierarchy when its compile snapshot
+  has changed or is incomplete. An incomplete key shares only its live flight,
+  with at most one consumed-once 60s/512MiB exact handoff: never cache it or broaden its scope.
   Persistent semantic sessions are default-off and require the soak gate. The
   optional disk cache does no startup scan, validates fresh ordered inputs/options/
   tops/snapshots before every hit, keeps entries private and treats corruption as a miss.

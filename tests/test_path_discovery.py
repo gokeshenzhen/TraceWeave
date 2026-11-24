@@ -728,7 +728,7 @@ class TestHints:
 
             assert "Simulation log is empty (0 bytes), simulation may not have completed" in result["hints"]
             assert "Waveform file is very small, simulation may have aborted early" in result["hints"]
-            assert "No elaborate-phase log found. build_tb_hierarchy may return partial results" in result["hints"]
+            assert any("No elaborate-phase log found" in hint and "top_hint" in hint for hint in result["hints"])
             assert any(hint.startswith("File is ") for hint in result["hints"])
 
 

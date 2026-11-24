@@ -145,7 +145,7 @@ Connect your assistant and ask, replacing the path with your project directory:
 
 > Use TraceWeave to investigate the simulation failure in `my_case` under `/path/to/verif`. Check logs, design structure, and interface handshakes, then trace suspicious signals. Include timestamps, signal paths, and source references.
 
-The investigation discovers current run artifacts, scans structural risks and parses failures. The assistant chooses tool order and scope from the failure phase and known target: inspect known signals/interfaces directly, or consider a scoped/global handshake sweep for opaque timeout or compare symptoms. An unperformed sweep leaves protocol behavior unchecked and does not block recommendations. A full hierarchy build remains available when explicitly needed.
+The investigation discovers current run artifacts, scans structural risks and parses failures. The assistant can inspect a known signal by its waveform path, check a specific interface, or use a handshake sweep for an unexplained timeout or mismatch. An unperformed sweep leaves protocol behavior unchecked and does not block recommendations. Call `build_tb_hierarchy` only when a full RTL/TB view or a legacy hierarchy handle is explicitly requested.
 
 Structural scanning is enabled by default (`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`).
 To skip it in the default workflow, set `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`
@@ -251,13 +251,15 @@ failure check. Text inputs can use `property_scope` or exact `property_bindings`
 
 After `get_sim_paths`, run `scan_structural_risks` as usual, then continue log
 and waveform investigation. Connectivity, hierarchy/file/class queries, X traces,
-packed layouts and failure correlation accept `compile_log` directly. They try
+packed layouts and failure correlation accept `compile_log` directly. A file
+lookup by name or path reads compile metadata. Semantic queries try
 healthy NPI using bounded metadata and an existing KDB, without full source
 capture or source validation. With no log, provide `kdb_path` and `top_hint`;
 compile file ownership and source fallback still require a log. KDB-only failure
 analysis/recommendation also requires an explicit `simulator` for log parsing.
 
 ```python
+lookup_tb_files(compile_log="/project/compile.log", basename="top_tb.sv")
 find_tb_instance(compile_log="/project/compile.log", path="tb.dut")
 explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
                       top_hint="tb", signal_path="tb.dut.q", wave_path="/project/run.fsdb")

@@ -59,10 +59,9 @@ server first looks for the exact current hierarchy and may perform one bounded
 recovery. Read `hierarchy_recovery`: historical source tokens are checked again,
 and absence of such tokens means current-source context only. Changed or
 ambiguous identities, timeouts and source budgets return a prerequisite call.
-Recovery does not run or mark `scan_structural_risks` complete; the independent
-preparation/scan workflow still applies. A full hierarchy is an explicit option.
-Do not substitute the latest session's
-case or drop identity tokens to make a stale action appear valid.
+Structural scanning follows its own workflow setting. Keep the original case
+and identity tokens when recovering a stale action. The full view and its
+handle tools are described in the [architecture guide](architecture.md#handle-based-hierarchy-access).
 
 This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
 
@@ -74,10 +73,12 @@ reading tools when those are available. `static_backend_no_path_api`, empty
 partial results and unresolved boundaries do not prove that no connection exists.
 Preserve any complete negative or objective exclusion within its stated scope.
 
-1. Keep the same `design_handle` and compile identity. Confirm file membership
-   with `lookup_tb_files` or `get_tb_file_detail`. Metadata-only lookup can still
-   identify compiled files when semantic details are unavailable. If identity
-   has changed, prepare a current context; do not borrow another design's files.
+1. Use the compile log for the design being traced. Confirm a file named in the
+   log with `lookup_tb_files(compile_log=..., basename=...)` and read the matching
+   compiled path. If several paths share that basename, use the reported path
+   to disambiguate. When continuing a prepared source query, reuse its
+   `design_handle` (including one returned as `native_route.source_design_handle`).
+   A changed source identity requires explicit preparation.
 2. Read the verified declarations and trace assignments, port connections,
    always blocks, parameters, generate conditions, packed fields and bit ranges.
    Record a file:line for each inferred hop. Keep unknown macro/parameter or
@@ -122,8 +123,8 @@ Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?
 │  - If hints contain warnings (empty log, missing wave) → inform user early
 │  - For a complete single-log flow, pick compile_log with phase="elaborate"
 │  - For split VCS source-compile/elaboration logs, use the source-compile log
-│    as primary and pass the other ordered logs to prepare_design_context via
-│    supplementary_compile_logs; scan_structural_risks uses that same primary
+│    as primary and pass the other logs to design queries in build order via
+│    supplementary_compile_logs. scan_structural_risks uses that same primary.
 │  - Store simulator for all subsequent tool calls
 │  - If fsdb_runtime.enabled is false → ignore `.fsdb` when `.vcd` is available
 │  - Only proceed to step 3 when `sim_logs` is non-empty
@@ -140,40 +141,13 @@ Step 2: scan_structural_risks(compile_log, simulator)
 │
 │  Explicit prepare_design_context remains available for strict source identity
 │  and recovery. Run it alongside the scan when explicitly preparing source.
-│  A changed/expired source observation requires explicit preparation; healthy
-│  NPI never consults that source alias. Verify compile ownership with
-│  lookup_tb_files/get_tb_file_detail before reading a source file.
+│  A changed or expired source observation requires explicit preparation.
+│  For a particular instance, pass compile_log directly to find_tb_instance
+│  or get_tb_subtree. Query dumped signals directly with the waveform path.
 │
-│  Explicit compatibility option: build_tb_hierarchy, alongside the same scan.
-│  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):
-│    - project: top_module, source_root, simulator
-│    - stats: file_count, module_count, instance_count, tree_depth,
-│             class_count, interface_count, uvm_file_count
-│    - tree_skeleton: component_tree truncated to depth 2 with `child_count`
-│      and `truncated` flags on each node
-│    - interfaces: full list (small)
-│    - ambiguous_basenames: collisions like xxx_v1.v vs xxx_v2.v — when
-│      non-empty, MUST disambiguate with `lookup_tb_files(basename=...)`
-│    - hierarchy_handle: pass to every handle tool
-│    - handle_tools: name map of the six handle tools
-│
-│  What the agent does next, on demand (via handle tools):
-│  - Drill into a branch     → get_tb_subtree(handle, root="top.x.y", depth=N)
-│  - Find a specific file    → lookup_tb_files(handle, basename=...) or
-│                              path_contains=... / has_module=... / contains_uvm=...
-│  - Locate an instance      → find_tb_instance(handle, path=...) or module=...
-│  - Read a file's symbols   → get_tb_file_detail(handle, path=...)
-│  - UVM class tree          → get_tb_class_hierarchy(handle, root_class=...)
-│  - Raw section (heavy)     → dump_tb_section(handle, section=...)
-│
-│  Before reading any RTL source file, call get_tb_file_detail(path=...) or
-│  lookup_tb_files(...) first. The compile_log is the only source of truth
-│  for which file version was compiled in this session.
-│
-│  In local NPI execution mode, a detected KDB may overlay hierarchy source
-│  locations with elaborated file:line data. The initial LSF scope deliberately
-│  does not submit an implicit job from build_tb_hierarchy, so its source
-│  locations remain compile-log-derived in LSF mode.
+│  Call build_tb_hierarchy only for an explicitly requested full RTL/TB view
+│  or legacy hierarchy handle. If also scanning the same log, run both in
+│  parallel. The returned hierarchy_handle is for browsing that full view.
 │
 └─ scan_structural_risks independently scans the compiled RTL/TB source set.
    Its lexical CPU work runs in a lock-free cancellable worker. Native semantic
@@ -209,9 +183,9 @@ Step 3: parse_sim_log(log_path, simulator)
 │  What the agent does:
 │  - Identify the earliest and most frequent error groups
 │  - Prefer `failure_events[0].time_ps` as the waveform time anchor when present
-│  - Cross-reference error signatures with step 2's hierarchy
-│    (e.g., UVM_ERROR [SCOREBOARD_MISMATCH] → find_tb_instance(module="scoreboard")
-│     or get_tb_subtree drilling from tree_skeleton)
+│  - If the error cites a source file, verify its compiled path with
+│    lookup_tb_files(compile_log=..., basename=...) before opening it.
+│    If it names an RTL instance, use find_tb_instance(compile_log=..., path=...).
 │  - Decide which group to investigate first (usually group_index=0)
 │  - If previous_log_detected == true, consider diff_sim_failure_results early
 │  - If the simulator overwrites the same log path on rerun, call
@@ -299,9 +273,9 @@ Step 6: search_signals(wave_path, keyword)
 │        Port-direction filtering requires FSDB — VCD cannot encode direction.
 │
 │  How the agent picks keywords:
-│  - From step 2's tree_skeleton or get_tb_subtree: module instance names → signal names
-│  - From step 3's error message: signal names mentioned in assertions or checkers
-│  - From RTL source code: verify path via get_tb_file_detail first, then read
+│  - Use names from the error message, recommended signals or known waveform scopes.
+│  - Inspect a known parent's children with get_tb_subtree(compile_log=..., root=...).
+│  - When taking names from RTL source, verify the file against the compile log first.
 │
 │  May need multiple calls with different keywords.
 │
@@ -515,8 +489,8 @@ get_sim_paths
 
 | Parameter | Source | Consumed by |
 |-----------|--------|-------------|
-| `compile_log` | Complete single-log build: elaborate log; split VCS build: primary source-compile log | `prepare_design_context`, explicit `build_tb_hierarchy`, `scan_structural_risks`, connectivity/X-trace tools, `build_kdb` |
-| `design_handle` | `prepare_design_context → design_handle` | Hierarchy/source queries, tracing, failure correlation and packed-field resolution |
+| `compile_log` | Complete single-log build: elaborate log; split VCS build: primary source-compile log | Structural scans, file/instance queries, connectivity and X traces, explicit full-tree or source preparation, `build_kdb` |
+| `design_handle` | `prepare_design_context → design_handle` or `native_route.source_design_handle` after source fallback | Hierarchy/source queries, tracing, failure correlation and packed-field resolution |
 | `simulator` | `get_sim_paths → simulator` | `prepare_design_context`, `build_tb_hierarchy`, `parse_sim_log`, `analyze_failures` |
 | `log_path` (sim) | `get_sim_paths → sim_logs[0].path` | `parse_sim_log`, `get_error_context`, `analyze_failures` |
 | `wave_path` | `get_sim_paths → chosen wave file (.vcd preferred when fsdb_runtime.enabled=false)` | `sweep_handshakes`, `search_signals`, `get_signal_*`, `analyze_failures` |
@@ -594,9 +568,11 @@ when calling an observation the first difference. Supply `context_a` / `context_
 to receive exact driver relays; follow their `status` and `prerequisite_calls`.
 
 Use `trace_divergence` when the comparison needs repeated driver and temporal
-queries. Build hierarchy and scan structural risks in parallel on each compile
-context first, then specify both `side_a` and `side_b` explicitly. They may name
-the same run. Map distinct designs/scopes using `signal_pairs` / `scope_pairs`;
+queries. For each of `side_a` and `side_b`, supply its `wave_path`, `signal_path`
+and `compile_log`, or use `kdb_path` with `top_hint` for a KDB-only design input.
+Each side also accepts its own prepared `design_handle` or exact legacy hierarchy
+identity. The sides may name the same run. Map distinct designs/scopes using
+`signal_pairs` / `scope_pairs`.
 `reference_side` labels the caller's intended reference, not which side is correct.
 Default NPI priority and LSF placement match normal trace tools.
 

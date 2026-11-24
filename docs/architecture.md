@@ -1928,7 +1928,11 @@ client's tool access separately through its configured TraceWeave connection.
 
 ## Handle-based Hierarchy Access
 
-`build_tb_hierarchy` generates a full hierarchy result server-side (project
+An explicit request for the full RTL/TB view uses `build_tb_hierarchy`.
+Scoped instance queries take `compile_log` directly. A `lookup_tb_files` query
+by filename or path reads compile metadata and needs no hierarchy handle.
+
+The full-tree tool generates a hierarchy result server-side (project
 metadata, grouped file list, complete `component_tree`, `class_hierarchy`,
 raw `compile_result`, compact per-file scan results, and a private immutable
 content snapshot) but returns only a **slim payload** to the LLM: project,
@@ -2236,9 +2240,9 @@ new preparation. Result caches and workflow/scan state remain intact.
 
 `build_tb_hierarchy.handle_lifetime="process"` is explicit. Driver results and
 prerequisite blockers carry an optional `hierarchy_recovery` receipt with status,
-budgets, coalescing, handle and validated context. `structural_scan_performed`
-remains false: recovering hierarchy does not satisfy the independent parallel
-structural-scan workflow. Ordinary matching no-handle hierarchy reuse is retained.
+budgets, coalescing, handle and validated context. Recovery leaves
+`structural_scan_performed=false`. Structural scanning has its own workflow
+setting and coverage. Ordinary matching no-handle hierarchy reuse is retained.
 
 Driver requests can bind a Verilator `TOP.<compiled_top>` dump root to the
 current design root through `wave_design_binding`. The binding requires exactly
@@ -2685,9 +2689,11 @@ wave/compile validation still discards changed evidence. No cross-request
 observation or transaction repository is created. Numeric cache metrics expose
 hits, misses, evictions, bypasses and peaks without names/paths/values.
 
-`src/divergence_context.py` freezes each side's exact hierarchy, ordered logs,
-source snapshot and top. Ready driver relays carry those identities into the
-normal public route instead of changing the mutable current session.
+`src/divergence_design_context.py` binds each trace side independently from its
+compile log or its KDB and top. A side may also supply a prepared design handle.
+For a side with legacy identity tokens, `src/divergence_context.py` verifies
+the exact hierarchy, ordered logs, source snapshot and top. Ready driver relays
+carry the identity of the side they describe.
 
 `src/dynamic_evidence.py` defines a bounded typed expression contract.
 `src/npi_dynamic.py` obtains cell/port, mux polarity and edge facts from NPI and

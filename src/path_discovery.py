@@ -860,7 +860,10 @@ def _generate_hints(
     if len(compile_logs) > 1:
         hints.append(f"Found {len(compile_logs)} compile logs, using the newest one is recommended")
     if compile_logs and not any(log.get("phase") == "elaborate" for log in compile_logs):
-        hints.append("No elaborate-phase log found. build_tb_hierarchy may return partial results")
+        hints.append(
+            "No elaborate-phase log found. Supply top_hint for design queries "
+            "if the compiled top is missing or ambiguous."
+        )
 
     if case_name is not None and not sim_logs:
         hints.append(f"No simulation log found for case {case_name}")

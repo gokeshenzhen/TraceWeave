@@ -143,7 +143,7 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 > 用 TraceWeave 调查 `/path/to/verif` 下 `my_case` 的仿真失败。检查日志、设计结构和接口握手，再追踪可疑信号。结论请附时间戳、信号路径和源码位置。
 
-调查先定位当前运行产物，扫描结构风险并解析失败日志。助手根据失败阶段和已知目标选择工具顺序与范围：已知信号或接口可直接定点检查；目标不明确的超时、挂起或比较失败可选择局部或全局握手扫描。未执行 sweep 表示协议行为未检查，不阻塞推荐或其他调查；需要完整层次时仍可显式构建。
+调查先定位当前运行产物，扫描结构风险并解析失败日志。助手可以按波形路径查询已知信号，也可以定点检查接口。对于原因不明的超时、挂起或比较失败，可以选择局部或全局握手扫描。未执行 sweep 表示协议行为未检查，不阻塞推荐或其他调查。只有明确请求完整 RTL/TB 层次视图或旧版层次句柄时，才调用 `build_tb_hierarchy`。
 
 结构扫描默认开启（`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`）。如需在默认流程中跳过，
 在 MCP 服务环境中设置 `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`，然后重启或重新连接服务。
@@ -242,12 +242,14 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 或精确的 `property_bindings` 绑定波形信号。
 
 `get_sim_paths` 后照常执行 `scan_structural_risks`，继续日志与波形调查。
-连接、层级/文件/类、X 追踪、packed 和失败关联工具可直接接收 `compile_log`：
-健康 NPI 仅校验有界元数据与现成 KDB，不提前捕获或校验完整源码。
+连接、层级/文件/类、X 追踪、packed 和失败关联工具可直接接收 `compile_log`。
+按文件名或路径核对编译归属时，只读取编译元数据。语义查询优先使用可用的 NPI，
+仅校验有界元数据与现成 KDB，无需提前捕获或校验完整源码。
 无日志时可提供 `kdb_path` + `top_hint`；编译文件归属与源码回退仍需日志。
 纯 KDB 的失败分析/推荐还须显式提供 `simulator`，用于解析日志。
 
 ```python
+lookup_tb_files(compile_log="/project/compile.log", basename="top_tb.sv")
 find_tb_instance(compile_log="/project/compile.log", path="tb.dut")
 explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
                       top_hint="tb", signal_path="tb.dut.q", wave_path="/project/run.fsdb")
