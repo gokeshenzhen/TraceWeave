@@ -77,7 +77,7 @@ def export_issue(spec: dict) -> dict:
         return DISABLED.copy()
     if not isinstance(spec, dict):
         raise ValueError("expected one JSON object per issue")
-    unknown = spec.keys() - {"issue", "fsdb", "groups", "error_time", "first_deviation"}
+    unknown = spec.keys() - {"issue", "fsdb", "groups", "changes", "error_time", "first_deviation"}
     if unknown:
         raise ValueError(f"unknown fields: {', '.join(sorted(unknown))}")
     slug = _issue_slug(spec.get("issue"))
@@ -93,7 +93,7 @@ def export_issue(spec: dict) -> dict:
         if not header["scale_fs_per_tick"]:
             raise ValueError("the selected FSDB has an unknown time scale")
         view = render_verdi_rc(
-            spec.get("groups"), error_time=spec.get("error_time"),
+            spec.get("groups"), changes=spec.get("changes"), error_time=spec.get("error_time"),
             first_deviation=spec.get("first_deviation"),
             duration_ps=header["simulation_duration_ps"], check_signal=parser.get_signal_declaration,
         )

@@ -102,29 +102,43 @@ def _signal_row(signal, declaration):
     return scope, "/" + "/".join(components)
 
 
-def render_verdi_rc(groups: dict, *, error_time=None, first_deviation=None,
-                    duration_ps: int, check_signal: Callable[[str], object]) -> str:
-    """Keep evidence order and validate each row against its exact dump declaration."""
+def _group_lines(name, signals, declaration, highlighted, *, changed):
+    if not isinstance(name, str) or not name.strip() or not name.isprintable():
+        raise ValueError("each group needs a printable name")
+    if not isinstance(signals, list) or (not changed and not signals):
+        raise ValueError(f"group {name!r} needs a list of signals (non-empty for function groups)")
+    title = f"RTL change - {name}" if changed else name
+    if not signals:
+        title += " (no mapped waveform signal)"
+    lines = ["", f"addGroup {_label(title)}"]
+    scopes = {}
+    for signal in signals:
+        scope, path = _signal_row(signal, declaration)
+        scopes.setdefault(scope, {})[path] = None
+        if changed:
+            highlighted.add(path)
+    for scope, paths in scopes.items():
+        label = _label(scope)
+        lines.append(f"addSubGroup {label}")
+        for path in paths:
+            color = "-c ID_YELLOW5 " if path in highlighted else ""
+            lines.append(f"addSignal {color}-h 15 {path}")
+        lines.append(f"endSubGroup {label}")
+    return lines
+
+
+def render_verdi_rc(groups: dict, *, changes: dict | None = None, error_time=None,
+                    first_deviation=None, duration_ps: int, check_signal: Callable[[str], object]) -> str:
+    """Put source edits first and keep their waveforms highlighted in the context groups."""
     lines = ["Magic 271485", "Revision Verdi_V-2023.12-SP2", ""]
     lines.extend(_time_lines(error_time, first_deviation, duration_ps))
     if not isinstance(groups, dict) or not groups:
         raise ValueError("groups must map function names to non-empty lists of signals")
+    if changes is not None and not isinstance(changes, dict):
+        raise ValueError("changes must map source edit locations and descriptions to signal lists")
     declaration = cache(check_signal)
-    for function, signals in groups.items():
-        if not isinstance(function, str) or not function.strip() or not function.isprintable():
-            raise ValueError("each function group needs a printable name")
-        if not isinstance(signals, list) or not signals:
-            raise ValueError(f"function group {function!r} needs a non-empty list of signals")
-        scopes = {}
-        for signal in signals:
-            scope, path = _signal_row(signal, declaration)
-            # Preserve order, including when the same signal participates in another function.
-            scopes.setdefault(scope, {})[path] = None
-
-        lines.extend(["", f"addGroup {_label(function)}"])
-        for scope, paths in scopes.items():
-            label = _label(scope)
-            lines.append(f"addSubGroup {label}")
-            lines.extend(f"addSignal -h 15 {path}" for path in paths)
-            lines.append(f"endSubGroup {label}")
+    highlighted = set()
+    for changed, sections in ((True, changes or {}), (False, groups)):
+        for name, signals in sections.items():
+            lines.extend(_group_lines(name, signals, declaration, highlighted, changed=changed))
     return "\n".join(lines) + "\n"

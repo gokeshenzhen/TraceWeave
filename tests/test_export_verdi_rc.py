@@ -133,6 +133,7 @@ def test_cli_and_nwave_restore_on_the_already_open_fsdb(
     wave = FIXTURES / f"{fixture}.fsdb"
     signal = f"{fixture}_tb.addr[31:0]"
     spec = {"issue": "地址 mismatch", "fsdb": str(wave), "groups": {"地址比较": [signal]},
+            "changes": {"decoder.sv:21 address bits": [{"path": signal, "slice": [7, 4]}]},
             "error_time": "101ns", "first_deviation": deviation}
     cmd = [sys.executable, str(SCRIPT)]
     exported = subprocess.run(cmd, input=json.dumps(spec), cwd=agent, text=True,
@@ -171,9 +172,11 @@ wvExit
                    cwd=viewer, capture_output=True, check=True, timeout=45)
     assert (viewer / "restored.txt").read_text().splitlines() == [
         str(wave), "1", str(wave), unit, f"1 {cursor} x {unit}", f"1 {marker} x {unit}",
-        "/" + signal.replace(".", "/"),
+        f"/{fixture}_tb/addr[7:4] /{fixture}_tb/addr[31:0]",
     ]
     saved = (viewer / "roundtrip.rc").read_text()
+    assert 'addGroup "RTL change - decoder.sv:21 address bits"' in saved
+    assert re.search(r"^addSignal .*ID_YELLOW5 .*addr\[7:4\]$", saved, re.M)
     assert 'addGroup "地址比较"' in saved and f'addSubGroup "{fixture}_tb"' in saved
     assert " reported_error ID_RED5 " in saved and " first_deviation ID_YELLOW8 " in saved
 

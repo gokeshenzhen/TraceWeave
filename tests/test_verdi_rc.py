@@ -112,3 +112,26 @@ def test_invalid_slice_cannot_be_rendered_as_the_whole_bus(bounds):
         render_verdi_rc({"G": [{"path": "tb.S[1:32]", "slice": bounds}]},
                         error_time=0, duration_ps=1,
                         check_signal=lambda path: {"declared_range": {"left": 1, "right": 32}})
+
+
+def test_changed_rows_come_first_and_keep_their_color_by_instance_and_slice():
+    checked = []
+    def declaration(path):
+        checked.append(path)
+        return {"declared_range": {"left": 1, "right": 32}}
+
+    bus, dout = "tb.u.S[1:32]", "tb.u.u1.dout[1:4]"
+    old = {"path": bus, "slice": [6, 9]}
+    view = render_verdi_rc({"Round": [old, bus, dout, "tb.u.u2.dout[1:4]"]},
+                           changes={"crp.v:21 output slice": [old, {"path": bus, "slice": [5, 8]}, dout],
+                                    "sbox2.v:26 case 17": [dout], "tb.sv:49 message": []},
+                           error_time=0, duration_ps=1, check_signal=declaration)
+    assert checked == [bus, dout, "tb.u.u2.dout[1:4]"]
+    assert [row for row in view.splitlines() if row.startswith("addGroup")] == [
+        'addGroup "RTL change - crp.v:21 output slice"', 'addGroup "RTL change - sbox2.v:26 case 17"',
+        'addGroup "RTL change - tb.sv:49 message (no mapped waveform signal)"', 'addGroup "Round"']
+    assert view.count("addSignal -c ID_YELLOW5 -h 15 /tb/u/S[6:9]") == 2
+    assert view.count("addSignal -c ID_YELLOW5 -h 15 /tb/u/S[5:8]") == 1
+    assert view.count("addSignal -c ID_YELLOW5 -h 15 /tb/u/u1/dout[1:4]") == 3
+    assert "addSignal -h 15 /tb/u/S[1:32]" in view
+    assert "addSignal -h 15 /tb/u/u2/dout[1:4]" in view
