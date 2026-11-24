@@ -582,14 +582,18 @@ current working directory. For example, with a repository checkout:
   "issue": "read_data_mismatch",
   "fsdb": "/path/to/run/wave.fsdb",
   "groups": {
-    "Read data": ["tb.u0.data[7:0]", "tb.u1.data[7:0]"],
+    "Read data": [
+      {"path": "tb.actual[7:0]", "role": "evidence"},
+      {"path": "tb.expected[7:0]", "role": "evidence"}
+    ],
     "Acceptance": ["tb.u1.valid", "tb.u1.ready"]
   },
   "changes": {
     "mux.sv:21 data[7:4] -> data[3:0]": [
       {"path": "tb.u0.data[7:0]", "slice": [7, 4]},
       {"path": "tb.u0.data[7:0]", "slice": [3, 0]},
-      "tb.u0.u_mux.dout[3:0]"
+      "tb.u0.u_mux.dout[3:0]",
+      {"path": "tb.u0.u_mux.sel", "role": "evidence"}
     ]
   },
   "error_time": "1250ns",
@@ -598,14 +602,26 @@ current working directory. For example, with a repository checkout:
 JSON
 ```
 
-When the report includes code edits, add one `changes` entry per edit site.
-Put the filename, line and a short description of the edit in the key. These
-groups open at the top of the view. Their signals appear in yellow, including
-when the same signal appears in a function group. For a changed connection,
-include the port and the old and new selections. For a changed case item, show
-the selector and assigned signal and name the index and value change in the
-label. Give an edit with no mapped signal an empty list and explain the gap in
-the report. Omit `changes` when the investigation has no code edits.
+Mark signals and slices according to how the final report uses them, even when
+the investigation ends without a code edit.
+
+| Signal role | nWave color | When to use it |
+|---|---|---|
+| `evidence` | Cyan | A sampled value, transition or comparison supports the conclusion or rules out a competing explanation. Mark both sides of a comparison when both contributed. |
+| `modified` | Yellow | The edit changes an assignment or a connection involving this signal or slice. |
+| `context` | Viewer default | The row helps DV navigate the waveform. |
+
+A plain signal or slice defaults to `context` in a function group and `modified`
+in a `changes` group. Set `role` on a row to override that default. All occurrences
+of the same instance path and slice share a color. Yellow takes priority when
+an edited signal also supplies evidence. Include the color key in the report.
+
+For each edit, add a `changes` entry with its filename, line and a short description.
+These groups open at the top of the view. For a changed connection, include the
+port and the old and new selections. For a changed case value, label the index
+and value change, mark the observed selector as `evidence` and the assigned signal
+as `modified`. Give an edit with no mapped signal an empty list and explain the
+gap in the report. Omit `changes` when the investigation has no code edits.
 
 Use exact FSDB declarations, including bus ranges. To display a packed slice,
 supply its exact parent `path` and the two inclusive `slice` indices in HDL

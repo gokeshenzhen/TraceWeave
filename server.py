@@ -12259,15 +12259,20 @@ To write under debug/, run the following command from the agent's current workin
 {shlex.join([sys.executable, exporter])}
 Send one JSON object on stdin with issue (short name), fsdb (absolute path), groups
 (function names to signal lists), error_time and/or first_deviation.
-Select signals that show the symptom and the checked upstream or opposite side.
+Mark each signal or slice whose observed value, transition or comparison supports the
+final analysis with {{"path":"tb.actual","role":"evidence"}}. Include evidence that
+ruled out a competing explanation. This applies even when there is no code edit.
 When the report describes code edits, include every edit site in changes. Each key
-names the file, line and what changed. List its exact dump paths to highlight them
-in nWave. For port rewiring include the port and both old and new slices. For a
-changed case item include its selector and assigned signal. A slice is
+names the file, line and what changed. Its rows default to role "modified". For port
+rewiring include the port and both old and new slices. For a changed case value,
+mark the observed selector as "evidence" and the assigned signal as "modified".
+Use role "context" for orientation-only rows in a change group. A slice is
 {{"path":"tb.u.bus[1:32]","slice":[6,9]}} in declared order. If an edit has no
 mapped waveform signal, keep its entry with an empty list and explain the gap.
 Use integer ps or unit strings. Prefer exact fs for a proved first deviation.
 Omit unknown times. Include the returned absolute rc_path and fsdb in the report.
+Explain the highlight colors there. Evidence is cyan and modified signals are yellow.
+Yellow takes priority for a signal or slice used in both roles.
 If the local command returns status=disabled, skip the attachment.
 DV opens that FSDB first and restores the RC. If export fails, report the reason."""
     return options

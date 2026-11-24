@@ -114,9 +114,11 @@ async def test_stdio_client_receives_the_configured_export_policy(tmp_path, valu
         return
     command = next(line for line in instructions.splitlines() if "export_verdi_rc.py" in line)
     assert shlex.split(command) == [sys.executable, str(SCRIPT)]
+    assert '"role":"evidence"' in instructions
     result = subprocess.run(shlex.split(command) + ["--help"], cwd=tmp_path, text=True,
                             capture_output=True, check=True)
     assert "first_deviation" in result.stdout
+    assert '"role":"evidence"' in result.stdout
 
 
 @pytest.mark.eda_integration
