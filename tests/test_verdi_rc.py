@@ -135,3 +135,35 @@ def test_changed_rows_come_first_and_keep_their_color_by_instance_and_slice():
     assert view.count("addSignal -c ID_YELLOW5 -h 15 /tb/u/u1/dout[1:4]") == 3
     assert "addSignal -h 15 /tb/u/S[1:32]" in view
     assert "addSignal -h 15 /tb/u/u2/dout[1:4]" in view
+
+
+def test_evidence_without_edits_colors_earlier_occurrences_of_only_the_exact_slice():
+    bus = "tb.g[0].S[1:32]"
+    bit = {"path": bus, "slice": [9, 9]}
+    other = {"path": "tb.g[1].S[1:32]", "slice": [9, 9]}
+    view = render_verdi_rc({"Overview": [bit, other, bus], "Boundary": [{**bit, "role": "evidence"}]},
+                           error_time=0, duration_ps=1,
+                           check_signal=lambda path: {"declared_range": {"left": 1, "right": 32}})
+    assert view.count("addSignal -c ID_CYAN5 -h 15 /tb/g[0]/S[9]\n") == 2
+    assert "addSignal -h 15 /tb/g[1]/S[9]\n" in view
+    assert "addSignal -h 15 /tb/g[0]/S[1:32]\n" in view
+    assert "ID_YELLOW5" not in view
+
+
+def test_roles_inside_edits_and_later_modified_signals_share_one_color_in_every_group():
+    selector, output, context = "tb.u.addr", "tb.u.dout", "tb.u.clk"
+    view = render_verdi_rc({"Result": [selector, {"path": output, "role": "modified"}, context]},
+                           changes={"table.sv:26": [{"path": selector, "role": "evidence"},
+                                                     {"path": output, "role": "evidence"},
+                                                     {"path": context, "role": "context"}],
+                                    "table.sv:32": [output]},
+                           error_time=0, duration_ps=1, check_signal=lambda path: None)
+    assert view.count("addSignal -c ID_CYAN5 -h 15 /tb/u/addr\n") == 2
+    assert view.count("addSignal -c ID_YELLOW5 -h 15 /tb/u/dout\n") == 3
+    assert view.count("addSignal -h 15 /tb/u/clk\n") == 2
+
+
+@pytest.mark.parametrize("role", [None, "candidate", True, []])
+def test_invalid_signal_roles_do_not_silently_lose_the_highlight(role):
+    with pytest.raises(ValueError, match="role"):
+        render({"Result": [{"path": "tb.u.q", "role": role}]})

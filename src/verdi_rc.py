@@ -76,18 +76,25 @@ def _label(text: str) -> str:
     return '"' + text.replace('"', r'\"') + '"'
 
 
-def _signal_row(signal, declaration):
-    is_slice = isinstance(signal, dict)
-    if is_slice and signal.keys() != {"path", "slice"}:
-        raise ValueError("a slice requires an exact declaration path and slice [left, right]")
-    parts = _signal_parts(signal["path"] if is_slice else signal)
+def _signal_row(signal, declaration, default_role):
+    role = default_role
+    bounds = None
+    if isinstance(signal, dict):
+        if "path" not in signal or signal.keys() - {"path", "slice", "role"}:
+            raise ValueError("a signal object needs an exact path and accepts optional slice and role")
+        role = signal.get("role", default_role)
+        if role not in ("evidence", "modified", "context"):
+            raise ValueError("signal role must be evidence, modified or context")
+        if "slice" in signal:
+            bounds = signal["slice"]
+            if not isinstance(bounds, list) or len(bounds) != 2 or any(type(n) is not int for n in bounds):
+                raise ValueError("slice must be two integer indices [left, right]")
+        signal = signal["path"]
+    parts = _signal_parts(signal)
     path = ".".join(parts)
     metadata = declaration(path)
     components = [_rc_component(part) for part in parts]
-    if is_slice:
-        bounds = signal["slice"]
-        if not isinstance(bounds, list) or len(bounds) != 2 or any(type(n) is not int for n in bounds):
-            raise ValueError("slice must be two integer indices [left, right]")
+    if bounds is not None:
         left, right = bounds
         declared = metadata["declared_range"]
         first, last = declared["left"], declared["right"]
@@ -99,10 +106,10 @@ def _signal_row(signal, declaration):
         leaf = re.sub(r"\[-?\d+(?::-?\d+)?\]$", "", components[-1])
         components[-1] = leaf + (f"[{left}]" if left == right else f"[{left}:{right}]")
     scope = "/".join(components[:-1]).rstrip() or "/"
-    return scope, "/" + "/".join(components)
+    return scope, "/" + "/".join(components), role
 
 
-def _group_lines(name, signals, declaration, highlighted, *, changed):
+def _collect_group(name, signals, declaration, colors, *, changed):
     if not isinstance(name, str) or not name.strip() or not name.isprintable():
         raise ValueError("each group needs a printable name")
     if not isinstance(signals, list) or (not changed and not signals):
@@ -110,26 +117,21 @@ def _group_lines(name, signals, declaration, highlighted, *, changed):
     title = f"RTL change - {name}" if changed else name
     if not signals:
         title += " (no mapped waveform signal)"
-    lines = ["", f"addGroup {_label(title)}"]
+    default_role = "modified" if changed else "context"
     scopes = {}
     for signal in signals:
-        scope, path = _signal_row(signal, declaration)
+        scope, path, role = _signal_row(signal, declaration, default_role)
         scopes.setdefault(scope, {})[path] = None
-        if changed:
-            highlighted.add(path)
-    for scope, paths in scopes.items():
-        label = _label(scope)
-        lines.append(f"addSubGroup {label}")
-        for path in paths:
-            color = "-c ID_YELLOW5 " if path in highlighted else ""
-            lines.append(f"addSignal {color}-h 15 {path}")
-        lines.append(f"endSubGroup {label}")
-    return lines
+        if role == "modified":
+            colors[path] = "ID_YELLOW5"
+        elif role == "evidence":
+            colors.setdefault(path, "ID_CYAN5")
+    return title, scopes
 
 
 def render_verdi_rc(groups: dict, *, changes: dict | None = None, error_time=None,
                     first_deviation=None, duration_ps: int, check_signal: Callable[[str], object]) -> str:
-    """Put source edits first and keep their waveforms highlighted in the context groups."""
+    """Keep source edits first and apply each signal's strongest role across groups."""
     lines = ["Magic 271485", "Revision Verdi_V-2023.12-SP2", ""]
     lines.extend(_time_lines(error_time, first_deviation, duration_ps))
     if not isinstance(groups, dict) or not groups:
@@ -137,8 +139,18 @@ def render_verdi_rc(groups: dict, *, changes: dict | None = None, error_time=Non
     if changes is not None and not isinstance(changes, dict):
         raise ValueError("changes must map source edit locations and descriptions to signal lists")
     declaration = cache(check_signal)
-    highlighted = set()
+    colors = {}
+    display_groups = []
     for changed, sections in ((True, changes or {}), (False, groups)):
         for name, signals in sections.items():
-            lines.extend(_group_lines(name, signals, declaration, highlighted, changed=changed))
+            display_groups.append(_collect_group(name, signals, declaration, colors, changed=changed))
+    for title, scopes in display_groups:
+        lines.extend(["", f"addGroup {_label(title)}"])
+        for scope, paths in scopes.items():
+            label = _label(scope)
+            lines.append(f"addSubGroup {label}")
+            for path in paths:
+                color = f"-c {colors[path]} " if path in colors else ""
+                lines.append(f"addSignal {color}-h 15 {path}")
+            lines.append(f"endSubGroup {label}")
     return "\n".join(lines) + "\n"
