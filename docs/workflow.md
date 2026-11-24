@@ -585,13 +585,33 @@ current working directory. For example, with a repository checkout:
     "Read data": ["tb.u0.data[7:0]", "tb.u1.data[7:0]"],
     "Acceptance": ["tb.u1.valid", "tb.u1.ready"]
   },
+  "changes": {
+    "mux.sv:21 data[7:4] -> data[3:0]": [
+      {"path": "tb.u0.data[7:0]", "slice": [7, 4]},
+      {"path": "tb.u0.data[7:0]", "slice": [3, 0]},
+      "tb.u0.u_mux.dout[3:0]"
+    ]
+  },
   "error_time": "1250ns",
   "first_deviation": "1210ns"
 }
 JSON
 ```
 
-Use exact FSDB declaration paths, including bus ranges. For escaped HDL names,
+When the report includes code edits, add one `changes` entry per edit site.
+Put the filename, line and a short description of the edit in the key. These
+groups open at the top of the view. Their signals appear in yellow, including
+when the same signal appears in a function group. For a changed connection,
+include the port and the old and new selections. For a changed case item, show
+the selector and assigned signal and name the index and value change in the
+label. Give an edit with no mapped signal an empty list and explain the gap in
+the report. Omit `changes` when the investigation has no code edits.
+
+Use exact FSDB declarations, including bus ranges. To display a packed slice,
+supply its exact parent `path` and the two inclusive `slice` indices in HDL
+declaration order. For example, `{"path":"tb.u.S[1:32]","slice":[6,9]}` displays
+`S[6:9]`. A repeated index selects one bit. All rows show the selected FSDB's
+values, including both ranges of a changed connection. For escaped HDL names,
 supply the literal hierarchy components as a JSON array, such as
 `["tb", "\\lane[0]", "\\net.with.dot"]`. Integer times are picoseconds.
 Unit strings accept fs, ps, ns, us, ms and s down to one femtosecond. Prefer

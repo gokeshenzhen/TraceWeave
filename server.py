@@ -12258,8 +12258,14 @@ with confirmed signals and a time in the selected FSDB. Group repeated occurrenc
 To write under debug/, run the following command from the agent's current working directory.
 {shlex.join([sys.executable, exporter])}
 Send one JSON object on stdin with issue (short name), fsdb (absolute path), groups
-(function name to a list of exact dump paths), error_time and/or first_deviation.
+(function names to signal lists), error_time and/or first_deviation.
 Select signals that show the symptom and the checked upstream or opposite side.
+When the report describes code edits, include every edit site in changes. Each key
+names the file, line and what changed. List its exact dump paths to highlight them
+in nWave. For port rewiring include the port and both old and new slices. For a
+changed case item include its selector and assigned signal. A slice is
+{{"path":"tb.u.bus[1:32]","slice":[6,9]}} in declared order. If an edit has no
+mapped waveform signal, keep its entry with an empty list and explain the gap.
 Use integer ps or unit strings. Prefer exact fs for a proved first deviation.
 Omit unknown times. Include the returned absolute rc_path and fsdb in the report.
 If the local command returns status=disabled, skip the attachment.

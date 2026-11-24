@@ -23,10 +23,15 @@ from src.verdi_rc import render_verdi_rc
 EXAMPLE = """Example JSON (stdin by default, or pass a JSON file):
 {"issue": "read_mismatch", "fsdb": "/run/wave.fsdb",
  "groups": {"Read data": ["tb.u0.data[7:0]", "tb.u1.data[7:0]"]},
+ "changes": {"mux.sv:21 data[7:4] -> data[3:0]": [
+   {"path":"tb.u0.data[7:0]", "slice":[7,4]}, {"path":"tb.u0.data[7:0]", "slice":[3,0]}]},
  "error_time": 1250000, "first_deviation": "1210ns"}
 Times are integer picoseconds or unit strings (fs, ps, ns, us, ms, s).
-Omit an unknown time. Use exact dump declarations; for escaped HDL names
-give a signal as a JSON list of literal hierarchy components."""
+Omit an unknown time. Use exact dump declarations or select a packed slice
+in declared [left, right] order. For escaped names give literal hierarchy
+components as a JSON list. For each reported edit, put its file, line and
+change in a changes key. Its signal rows are highlighted. An empty list
+keeps an edit visible when it has no mapped waveform signal."""
 
 
 DISABLED = {"status": "disabled", "reason": "TRACEWEAVE_VERDI_RC_EXPORT=0"}
