@@ -26,7 +26,7 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 
 支持 Claude Code、Codex、Copilot 等 MCP 客户端。你用自然语言描述问题，助手通过工具查证、追踪和验证，返回可以复查的调试证据。
 
-[适用场景](#适用场景) · [安装](#安装) · [客户端配置](#客户端配置) · [开始调试](#开始调试) · [工具速查](#工具速查) · [常见问题](#常见问题) · [文档与反馈](#文档与反馈)
+[适用场景](#适用场景) · [安装](#安装) · [客户端配置](#客户端配置) · [工具速查](#工具速查) · [常见问题](#常见问题) · [文档与反馈](#文档与反馈)
 
 <p align="center">
   <img src="assets/onepage.png" alt="TraceWeave 从日志、波形到源码追踪的调试工作流" width="900">
@@ -137,44 +137,6 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 
 客户端需要继承或显式传入这些变量；相关工程文件与 TraceWeave 安装、缓存目录须在提交节点和执行节点以相同绝对路径可见。完整的 bash / tcsh、客户端环境转发和验证方法见 [LSF 配置说明](docs/architecture.md#lsf-only-npi-licenses)。
 
-## 开始调试
-
-连接助手后，替换工程路径，直接描述问题：
-
-> 用 TraceWeave 调查 `/path/to/verif` 下 `my_case` 的仿真失败。检查日志、设计结构和接口握手，再追踪可疑信号。结论请附时间戳、信号路径和源码位置。
-
-使用仓库版的 FSDB 环境时，对于有信号和时间证据的问题，本地 agent 会在报告中附上 Verdi 波形配置文件。在 nWave 中先打开报告指定的 FSDB，再载入 `.rc`，即可按功能和实例查看相关信号，并跳到已确认的报错点和首次偏差处。支撑最终分析的证据信号以青色高亮。每处代码修改列在窗口顶部，组名标出文件、行号和改动。实际修改的信号或切片以黄色高亮，兼作证据时也显示黄色。导出默认开启。在 MCP 服务环境设 `TRACEWEAVE_VERDI_RC_EXPORT=0` 并重新连接即可关闭。[导出说明](docs/workflow.md#fsdb-report-export)
-
-调查先定位当前运行产物，扫描结构风险并解析失败日志。助手可以按波形路径查询已知信号，也可以定点检查接口。对于原因不明的超时、挂起或比较失败，可以选择局部或全局握手扫描。未执行 sweep 表示协议行为未检查，不阻塞推荐或其他调查。只有明确请求完整 RTL/TB 层次视图或旧版层次句柄时，才调用 `build_tb_hierarchy`。
-
-结构扫描默认开启（`TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=1`）。如需在默认流程中跳过，
-在 MCP 服务环境中设置 `TRACEWEAVE_STRUCTURAL_SCAN_IN_WORKFLOW=0`，然后重启或重新连接服务。
-仍可明确要求调用 `scan_structural_risks`；跳过代表未检查。握手扫描和单次扫描模式不受影响。
-
-检查位级多驱和无驱时，向 `scan_structural_risks` 显式传入
-`semantic_categories=["multiple_driver", "undriven_signal"]`，可用
-`semantic_scope="tb.dut.u_block"` 选择关注范围。NPI 和 Slang 均支持：`auto`
-优先使用现成 KDB，否则仅复用兼容源码结果；`deep` 还允许构建 Slang 语义。
-类别列表替换默认选择。结果描述静态驱动来源，以及有消费者的位上已证明为空的驱动清单，
-不判定运行时冲突。零发现须结合覆盖状态和缺口解读，边界见
-[位级驱动检查](docs/architecture.md#bit-level-driver-checks)。
-
-也可以从具体问题开始：
-
-- **定位差异：**“比较这两份波形中的 `tb.dut.result`，分别追踪造成差异的数据与控制逻辑。”
-- **追查 X：**“`tb.dut.q` 在 36 ns 为 X，但输入已恢复已知值。回看 0～36 ns 的采样和保持历史。”
-- **检查事务：**“检查这个 TL-UL 接口在 10～20 μs 内的停顿、响应延迟和未完成请求。”
-- **扫描源码：**“用 deep 模式检查这份编译日志对应设计中的可疑 tie、悬空输入和常量比较。”
-- **验证假设：**“在每个时钟沿前采样，检查等待 ready 时 payload 是否保持稳定。”
-
-还可以计算 [SV 表达式](docs/expressions.md)、按字段查看打包总线，以及比较修复前后的失败。结果会说明覆盖限制：检查不完整时，零发现不能证明设计正确。
-
-首次连接可让助手调用 `get_sim_paths`，确认实际 MCP 调用成功。完整步骤见[调试工作流](docs/workflow.md)，仓库端读取验收见[读值检查](docs/architecture.md#readback-client-check)。
-
-### 自定义运行日志
-
-内置解析支持 UVM、VCS/Xcelium 断言，以及已支持的 Verilator/cocotb 失败格式。项目自定义 checker 标签可通过 [custom_patterns.yaml](custom_patterns.yaml) 添加，也可用 `TRACEWEAVE_CUSTOM_PATTERNS_FILE` 指定独立文件。配置示例与 Verilator 时间单位要求见[日志格式说明](docs/architecture.md#runtime-log-formats)。
-
 ## 工具速查
 
 通常只需描述调试目标，由助手选择工具。下表列出全部工具；具体参数与支持范围以 MCP 工具定义为准。
@@ -225,50 +187,6 @@ export TRACEWEAVE_NPI_LSF_QUEUE="digital"
 |  | `cursor_list` | 列出当前会话游标 |
 |  | `cursor_delete` | 删除时间游标 |
 | EDA 集成 | `build_kdb` | 构建并缓存 Verdi KDB |
-
-### 原生优先查询
-
-`explain_property` 支持独立文本、保留输入顺序和 ID 的批量输入，以及显式共享声明单元。
-源码目标可附 `compile_log` 或 `design_handle`，通过 `target`、`instance_path`
-或 `line` 选择一个定义或指令。它只解释源码语义，不启动仿真、证明或 LLM。
-逐项读取完整性与具体缺口；未关联运行的文本模式为 unknown，可用精确的
-`run_anchor` 关联已有 simulation/formal 发现结果。示例、可选前端依赖与资源限制见
-[断言语义解释](docs/architecture.md#property-explanations)。
-
-复核日志中的断言失败时，先请求 `explain_property(include_check_plan=true)`，
-将 `results[].check_plan.handle` 传给 `verify_window` 的 `property_plan`，并指定
-`mode="property"`、VCD/FSDB/FST 的 `wave_path` 以及 `log_path` 或规范化的 `failure_event`。
-提供日志时，工具选择目标断言实例的首次失败，自动推导时钟、尝试起点与历史窗口，
-读取沿前值并返回关联源码节点的数值与端点证据。结合 `status`、覆盖范围和缺口解释结果；
-`not_reproduced` 只针对本次失败复核，不代表全局通过。文本计划可通过 `property_scope`
-或精确的 `property_bindings` 绑定波形信号。
-
-`get_sim_paths` 后照常执行 `scan_structural_risks`，继续日志与波形调查。
-连接、层级/文件/类、X 追踪、packed 和失败关联工具可直接接收 `compile_log`。
-按文件名或路径核对编译归属时，只读取编译元数据。语义查询优先使用可用的 NPI，
-仅校验有界元数据与现成 KDB，无需提前捕获或校验完整源码。
-无日志时可提供 `kdb_path` + `top_hint`；编译文件归属与源码回退仍需日志。
-纯 KDB 的失败分析/推荐还须显式提供 `simulator`，用于解析日志。
-
-```python
-lookup_tb_files(compile_log="/project/compile.log", basename="top_tb.sv")
-find_tb_instance(compile_log="/project/compile.log", path="tb.dut")
-explain_signal_driver(kdb_path="/project/simv.daidir/kdb.elab++",
-                      top_hint="tb", signal_path="tb.dut.q", wave_path="/project/run.fsdb")
-```
-
-普通原生不可用会在同一请求内自动准备源码。查看 `native_route`：元数据、KDB、
-源码身份分别记录，KDB 与源码的版本关联始终为 `unverified`。回退返回真实
-`source_design_handle` 供显式复用；已观察源码变化时严格报错，须显式重新准备并
-携带新 handle。`backend_preference="source"` 跳过 KDB 发现；`retry_npi=true`
-重试同一 KDB 代次已记忆的加载失败，单工具能力不足不会禁用其他原生工具。
-解析、原生查询、回退与最终校验共享 `timeout_sec`（有限且不超过 300 秒）。
-
-`prepare_design_context` 保留完整源码身份与恢复用途，旧 handle 和历史 action
-契约不变。文件结果用 `ownership_basis="compile_metadata"` 与
-`source_status="not_captured"` 区分编译记录和已捕获源码。名称/路径过滤与三种
-编译记录导出无需 KDB 或语义 provider。缓存 KDB 发现仍精确 hash 源码，成本单列；
-不会自动构建 KDB。结构扫描和可选握手调查分别保留 coverage；未执行或零覆盖均不能判为干净。
 
 ## 常见问题
 
