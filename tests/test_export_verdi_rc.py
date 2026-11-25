@@ -139,7 +139,8 @@ def test_cli_and_nwave_restore_on_the_already_open_fsdb(
             "changes": {"decoder.sv:21 address bits": [{"path": signal, "slice": [7, 4]}]},
             "error_time": "101ns", "first_deviation": deviation}
     cmd = [sys.executable, str(SCRIPT)]
-    exported = subprocess.run(cmd, input=json.dumps(spec), cwd=agent, text=True,
+    # NPI initialization can change the test process locale. The receipt is UTF-8.
+    exported = subprocess.run(cmd, input=json.dumps(spec), cwd=agent, encoding="utf-8",
                               capture_output=True, check=True, timeout=30)
     receipt = json.loads(exported.stdout)
     rc = Path(receipt["rc_path"])
@@ -173,11 +174,11 @@ wvExit
 """)
     subprocess.run(["nWave", "-nologo", "-nogui", "-ssf", str(wave), "-play", str(script)],
                    cwd=viewer, capture_output=True, check=True, timeout=45)
-    assert (viewer / "restored.txt").read_text().splitlines() == [
+    assert (viewer / "restored.txt").read_text(encoding="utf-8").splitlines() == [
         str(wave), "1", str(wave), unit, f"1 {cursor} x {unit}", f"1 {marker} x {unit}",
         f"/{fixture}_tb/addr[7:4] /{fixture}_tb/addr[31:0]",
     ]
-    saved = (viewer / "roundtrip.rc").read_text()
+    saved = (viewer / "roundtrip.rc").read_text(encoding="utf-8")
     assert 'addGroup "RTL change - decoder.sv:21 address bits"' in saved
     assert re.search(r"^addSignal .*ID_YELLOW5 .*addr\[7:4\]$", saved, re.M)
     assert re.search(r"^addSignal .*ID_CYAN5 .*addr\[31:0\]$", saved, re.M)
@@ -187,7 +188,7 @@ wvExit
     spec["groups"] = {"Data": ["addr[31:0]"]}  # A real suffix, but no such exact dump path.
     manifest = agent / "bad.json"
     manifest.write_text(json.dumps(spec))
-    failed = subprocess.run(cmd + [str(manifest)], cwd=agent, text=True, capture_output=True)
+    failed = subprocess.run(cmd + [str(manifest)], cwd=agent, encoding="utf-8", capture_output=True)
     assert failed.returncode != 0 and failed.stdout == ""
     assert "Exact dump declaration not found" in failed.stderr
     assert list(rc.parent.iterdir()) == [rc]
