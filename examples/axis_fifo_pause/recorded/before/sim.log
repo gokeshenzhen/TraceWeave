@@ -1,0 +1,4 @@
+AXIS_FIFO_PAUSE FAIL valid_dropped_before_handshake time_ps=75000
+[80000] %Fatal: tb.sv:75: Assertion failed in TOP.tb: valid_dropped_before_handshake
+%Error: ../../tb.sv:75: Verilog $stop
+Aborting...

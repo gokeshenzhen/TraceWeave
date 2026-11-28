@@ -1,0 +1,11 @@
+--- a/axis_fifo.v
++++ b/axis_fifo.v
+@@ -525,7 +525,7 @@
+                     pause_frame_reg <= 1'b1;
+                 end
+             end else begin
+-                if (!pause_frame_reg) begin
++                if (!pause_frame_reg && !m_axis_tvalid) begin
+                     pause_reg <= pause_req;
+                 end
+             end

@@ -28,7 +28,7 @@ Use it with Claude Code, Codex, Copilot, or another MCP client. Describe the pro
 
 The TraceWeave Premium HWE-Bench evaluation summary reports that the group with access to Premium MCP tools passed 213/240 tasks (88.75%) and the control group without those tools passed 188/240 (78.33%), a net gain of 25 tasks for the tool group. [Results by project](#traceweave-premium-on-hwe-bench)
 
-[Use Cases](#use-cases) · [Installation](#installation) · [Client Setup](#client-setup) · [Tool Quick Reference](#tool-quick-reference) · [FAQ](#faq) · [Documentation and Feedback](#documentation-and-feedback)
+[Use Cases](#use-cases) · [Runnable example](#try-the-axi-stream-fifo-pause-case) · [Installation](#installation) · [Client Setup](#client-setup) · [Tool Quick Reference](#tool-quick-reference) · [FAQ](#faq) · [Documentation and Feedback](#documentation-and-feedback)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/gokeshenzhen/TraceWeave/main/assets/onepage-en.png" alt="TraceWeave debugging workflow from logs and waveforms to source tracing" width="900">
@@ -49,6 +49,27 @@ The TraceWeave Premium HWE-Bench evaluation summary reports that the group with 
 Supports VCS / Xcelium / Verilator simulation logs and VCD / FSDB / FST waveforms. Exported formal waveforms can also be queried; automatic artifact discovery currently supports JasperGold.
 
 Trace signals from the waveform back to their driving logic with **Verdi NPI → Source Graph → basic static analysis**, according to available tools and query coverage. Source Graph provides semantic source analysis without a commercial license. Results retain source references, coverage gaps, and next steps so you can check the evidence before assigning a root cause.
+
+## Try the AXI-Stream FIFO pause case
+
+In a public `verilog-axis` FIFO revision, requesting a frame pause under backpressure makes `TVALID` drop before the receiver accepts the first beat. From the repository root, replay the original and repaired waveforms with the open-source TraceWeave tools and Python 3.11+ alone.
+
+```bash
+python3 examples/axis_fifo_pause/replay.py
+```
+
+The original trace shows the handshake violation at **75 ns**. With the example repair, the receiver accepts both beats of the first frame, the FIFO acknowledges the pause, and the second frame transfers after release. Try this prompt in an AI client connected to TraceWeave MCP.
+
+> Use TraceWeave to debug `examples/axis_fifo_pause/recorded/before`. Which beat failed to transfer? Trace it to the RTL, fix a copy, and rerun the same testbench to verify your repair.
+
+The repository includes the example patch. Run the command for your simulator to test the original and repaired RTL with the same self-checking testbench.
+
+```bash
+python3 examples/axis_fifo_pause/simulate.py verilator
+python3 examples/axis_fifo_pause/simulate.py vcs
+```
+
+Add `--rtl /path/to/axis_fifo.v` to test your own repair. [Waveform walkthrough and upstream sources](https://github.com/gokeshenzhen/TraceWeave/blob/main/docs/workflow.md#axi-stream-fifo-pause-example)
 
 ## TraceWeave Premium on HWE-Bench
 

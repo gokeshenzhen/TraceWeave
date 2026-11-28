@@ -1,0 +1,2 @@
+AXIS_FIFO_PAUSE PASS beats=3 time_ps=170000
+- tb.sv:105: Verilog $finish

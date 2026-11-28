@@ -1,0 +1,1 @@
+verilator --cc --exe --build --trace --trace-depth 2 -Wno-fatal --top-module tb ../../axis_fifo.v ../../tb.sv ../../clock.cpp

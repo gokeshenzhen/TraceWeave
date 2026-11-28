@@ -558,6 +558,32 @@ analyze_failures(group_index=0) → findings → need more signals?
     └─ Not enough info → analyze_failures(group_index=1) → next error group
 ```
 
+## AXI-Stream FIFO pause example
+
+The FIFO in `examples/axis_fifo_pause/axis_fifo.v` is the MIT-licensed original from `alexforencich/verilog-axis`, pinned to the parent of its public pause fix. The testbench enables `PAUSE_ENABLE` and `FRAME_PAUSE`, sends two frames, and asserts `pause_req` while the first output beat is stalled. The example includes its own one-line repair for this regression. [Original RTL](https://github.com/alexforencich/verilog-axis/blob/7823b916bfd298441d5fdabf0b03d0ae8dc210e8/rtl/axis_fifo.v) · [Upstream repair](https://github.com/alexforencich/verilog-axis/commit/e493c6cdb4fd20939b7b9a613e9ab6fd7395ada2)
+
+Start an MCP investigation with `get_sim_paths` on the absolute path to `examples/axis_fifo_pause/recorded/before`. Its compile log records the Verilator invocation with paths relative to that directory. Use `lookup_tb_files` to locate `axis_fifo.v` and `tb.sv`. Call `inspect_handshake` on `TOP.tb.m_axis_tvalid` and `TOP.tb.m_axis_tready`, using `TOP.tb.clk` and payload signals `m_axis_tdata` and `m_axis_tlast` in the same scope. Use `get_signals_by_cycle` with `sample_phase="before"` to check what the receiver saw on each rising edge.
+
+| Run | Rising edge | What the waveform shows |
+|---|---|---|
+| Original | 25, 35, 45 ns | The FIFO accepts `0xA1`, `0xA2` (first frame end), then `0xB1` (second frame end) at its input. |
+| Original | 55, 65, 75 ns | The output presents `0xA1` while `TREADY=0`. At 65 ns the pause request is high. At 75 ns `pause_ack=1` and output `TVALID=0`, although `dut.m_axis_tvalid_out=1`. TraceWeave reports `premature_valid_deassertion` with `accepted_before_deassert=false`. |
+| Repaired | 95, 105, 115 ns | The sink accepts `0xA1` and `0xA2` on the first two edges. At 115 ns the pause is acknowledged and the second frame is held while the sink is ready. |
+| Repaired | 145 ns | After release, `0xB1` transfers once with `TLAST=1`. The checker reports `PASS beats=3` at 170 ns. |
+
+The testbench logs the first failing rising edge at 75 ns and calls `$fatal` on the next falling edge at 80 ns so the waveform includes the evidence. With Source Graph available, call `explain_signal_driver` for `TOP.tb.dut.m_axis_tvalid` with the original wave, compile log, `top_hint="tb"` and `include_dependencies=true`. It locates the assignment at `axis_fifo.v:507`. Sampling its two inputs at 75 ns shows `m_axis_tvalid_out=1` and `pause.pause_reg=1`.
+
+In the original RTL, the pause logic treats the FIFO as between frames until the **first handshake**. It can therefore latch a pause after the first beat is **presented** but before it is accepted. The pause register then gates off output `TVALID`. The example patch keeps an already-presented beat valid through the handshake and still honors the pending pause at the frame boundary.
+
+From the repository root, `python3 examples/axis_fifo_pause/replay.py` checks the bundled Verilator logs and VCDs offline. For a fresh run, use `simulate.py verilator` with Verilator 5, a C++ compiler and GNU Make, or `simulate.py vcs` with a configured VCS installation and license. Both use GNU `patch` to apply the example repair to a copy and test both revisions with the same checker. The printed run directory contains the compiled source copies, `compile.log`, `sim.log` and `wave.vcd` for each run. Use `--out DIR` to keep runs under a chosen parent.
+
+To test an AI-generated or hand-written repair, copy the original RTL, edit it and pass the copy to the same checker. A failing candidate returns a nonzero exit status.
+
+```bash
+python3 examples/axis_fifo_pause/simulate.py verilator --rtl /path/to/axis_fifo.v
+python3 examples/axis_fifo_pause/simulate.py vcs --rtl /path/to/axis_fifo.v
+```
+
 ## FSDB report export
 
 When preparing the final report, the local agent exports one nWave signal RC for

@@ -28,7 +28,7 @@ TraceWeave 是面向 RTL / SoC 调试的 MCP 服务器。它把编译记录、�
 
 TraceWeave Premium 版本 HWE-Bench 评测汇总，接入 Premium MCP 工具的实验组通过 213/240 题（88.75%），未接入这些工具的对照组通过 188/240 题（78.33%），工具组净多通过 25 题。[分项目成绩](#traceweave-premium-的-hwe-bench-评测)
 
-[适用场景](#适用场景) · [安装](#安装) · [客户端配置](#客户端配置) · [工具速查](#工具速查) · [常见问题](#常见问题) · [文档与反馈](#文档与反馈)
+[适用场景](#适用场景) · [可运行案例](#动手调试-axi-stream-fifo-暂停故障) · [安装](#安装) · [客户端配置](#客户端配置) · [工具速查](#工具速查) · [常见问题](#常见问题) · [文档与反馈](#文档与反馈)
 
 <p align="center">
   <img src="assets/onepage.png" alt="TraceWeave 从日志、波形到源码追踪的调试工作流" width="900">
@@ -49,6 +49,27 @@ TraceWeave Premium 版本 HWE-Bench 评测汇总，接入 Premium MCP 工具的�
 支持 VCS / Xcelium / Verilator 仿真日志及 VCD / FSDB / FST 波形。已有 formal 导出波形同样可查询；当前支持自动发现 JasperGold 产物。
 
 信号追踪按 **Verdi NPI → Source Graph → 基础静态分析** 路由，结合可用工具与查询覆盖范围，从波形追到驱动逻辑。Source Graph 提供免商业 license 的语义源码分析；结果保留源码位置、覆盖缺口和后续调查方向，方便你核实证据，再判断根因。
+
+## 动手调试 AXI-Stream FIFO 暂停故障
+
+`verilog-axis` 的一个公开版本在下游反压时收到帧间暂停请求，会在首个数据拍被接收前撤销 `TVALID`。在仓库根目录运行下面的命令，只需 Python 3.11+ 就能用开源版 TraceWeave 回放修复前后的真实波形。
+
+```bash
+python3 examples/axis_fifo_pause/replay.py
+```
+
+原版在 **75 ns** 出现握手违规。应用示例补丁后，下游收完第一帧的两拍，FIFO 才应答暂停，解除暂停后再传第二帧。也可以在接入 TraceWeave MCP 的 AI 客户端试试这句提示。
+
+> 用 TraceWeave 调试 `examples/axis_fifo_pause/recorded/before`。哪一拍数据没被接收？从波形追到对应的 RTL，在副本上修复，用同一个 testbench 重跑验证。
+
+示例补丁已随仓库提供。选择你已配置的仿真器，运行下面任一命令，即可用同一个自检 testbench 验证修复前后的 RTL。
+
+```bash
+python3 examples/axis_fifo_pause/simulate.py verilator
+python3 examples/axis_fifo_pause/simulate.py vcs
+```
+
+加上 `--rtl /path/to/axis_fifo.v` 即可验证自己的修复。[逐拍证据与上游代码来源](docs/workflow.md#axi-stream-fifo-pause-example)
 
 ## TraceWeave Premium 的 HWE-Bench 评测
 
